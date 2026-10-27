@@ -22,7 +22,8 @@ const AVATAR_COLORS = ["#5c7cfa", "#20c997", "#f76707", "#be4bdb", "#1c7ed6", "#
 export function Avatar({ name, id, size = 36, presence }: { name: string; id?: string | null; size?: number; presence?: Presence }) {
   const version = useAvatarVersion(id);
   const [failed, setFailed] = useState<number | null>(null);
-  const photo = version !== undefined && failed !== version ? `/api/users/${id}/avatar?v=${version}` : null;
+  // "r" changes only if cached copies must be thrown away everywhere (r=2: early photos were cached as empty files).
+  const photo = version !== undefined && failed !== version ? `/api/users/${id}/avatar?v=${version}&r=2` : null;
   const initials = name
     .split(/\s+/)
     .slice(0, 2)
