@@ -57,7 +57,13 @@ const COLUMN: Record<TaskStatus, { dot: string; hint?: string }> = {
 };
 
 type Me = TrackerData["me"];
-const canEdit = (t: TaskRow, me: Me) =>
+
+/** A team's tickets — plus tickets without a team (e.g. made in a private chat with the bot) that its members are on. */
+const inTeam = (t: TaskRow, team: TrackerData["teams"][number]) =>
+  t.team === team._id ||
+  (!t.team && [t.assignee?._id, ...(t.collaborators ?? []).map((c) => c._id)].some((id) => !!id && team.memberIds.includes(id)));
+
+const canEdit =(t: TaskRow, me: Me) =>
   canEditTicket(me, {
     team: t.team,
     assigneeId: t.assignee?._id,
@@ -130,7 +136,7 @@ export default function TrackerView() {
   const teamTasks = useMemo(
     () =>
       (data?.tasks ?? [])
-        .filter((t) => !team || t.team === team._id)
+        .filter((t) => !team || inTeam(t, team))
         .map((t) => {
         const s = pending[t._id];
         if (!s || s === t.status) return t;
@@ -267,7 +273,7 @@ export default function TrackerView() {
               color={t.color}
               linked={t.telegramLinked}
               mine={me.teamIds.includes(t._id)}
-              count={data.tasks.filter((x) => x.team === t._id && x.status !== "done").length}
+              count={data.tasks.filter((x) => inTeam(x, t) && x.status !== "done").length}
             />
           ))}
         </nav>
