@@ -9,8 +9,8 @@ import { appTimeZone, dayKey, startOfDay } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-/** Bot counts as running if it checked in within this window (it beats every minute). */
-const BOT_STALE_MS = 3 * 60_000;
+/** Bot counts as running if it checked in within this window (worker: every minute; webhook mode: each cron call). */
+const BOT_STALE_MS = 12 * 60_000;
 
 /** Everything the /admin page watches. Admins only. */
 export const GET = withUser(async (_req, { user }) => {

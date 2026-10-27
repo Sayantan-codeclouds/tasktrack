@@ -16,6 +16,17 @@ async function main() {
   await connectDB();
   console.log("[bot] connected to MongoDB");
 
+  // If the deployed website is receiving updates by webhook, polling here would silently take
+  // the bot away from it (starting a poller deletes the webhook). Refuse unless told otherwise.
+  const hook = await bot.api.getWebhookInfo();
+  if (hook.url && process.env.BOT_FORCE_POLLING !== "1") {
+    console.error(
+      `[bot] Not starting: the live site is receiving this bot's messages at ${hook.url}.\n` +
+        `      Use a separate test bot token for local work, or set BOT_FORCE_POLLING=1 to take over (the live site will stop getting messages until its next /api/cron run).`,
+    );
+    process.exit(1);
+  }
+
   if (AUTO_OFFLINE_MINUTES > 0) {
     setInterval(() => {
       autoOfflineIdleUsers(AUTO_OFFLINE_MINUTES)

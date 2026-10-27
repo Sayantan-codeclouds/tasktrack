@@ -182,16 +182,29 @@ People can just talk. These commands are there when someone wants to be exact:
 
 ## Deploy on Render
 
-[`render.yaml`](render.yaml) is a Render Blueprint that creates both parts:
+Everything runs on **one free Web Service**. The bot lives inside the website:
+- **Messages:** Telegram delivers each one to `/api/telegram/webhook` (a "webhook").
+- **Scheduled work:** a free external scheduler calls `/api/cron` every few minutes. That posts EOD/EOW reports, marks idle people offline, and keeps the free instance awake.
 
-| Service | Type | Plan |
-|---|---|---|
-| `tasktrack-web` | Web Service: the website | Free (sleeps after 15 minutes idle); Starter to keep it always on |
-| `tasktrack-bot` | Background Worker: the Telegram bot | Starter (workers have no free plan) |
+[`render.yaml`](render.yaml) describes the service. You can use it as a Blueprint, or set the service up by hand:
 
 1. **MongoDB Atlas:** go to Network Access → Add IP Address → **Allow access from anywhere** (`0.0.0.0/0`). Render's outgoing IP addresses change.
-2. **Create the services:** Render → **New → Blueprint** → connect this repo → Apply. Render asks for the secret values: `MONGODB_URI`, `TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `ADMIN_EMAILS`, `TELEGRAM_BOT_USERNAME`, and `APP_URL` (the site's `https://….onrender.com` address).
-3. **Stop any local copy of the bot.** Only one copy can run, or Telegram returns `409 Conflict`.
+2. **Render:** New → **Web Service** → connect this repo.
+   - Runtime: **Node**
+   - Build command: `npm ci && npm run build`
+   - Start command: `npm start`
+   - Instance type: **Free**
+3. **Environment variables:**
+   - Secrets you provide: `MONGODB_URI`, `TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `ADMIN_EMAILS`, `TELEGRAM_BOT_USERNAME`
+   - `APP_URL`: the site's address, e.g. `https://tasktrack-web.onrender.com`
+   - Three long random strings: `JWT_SECRET`, `TELEGRAM_WEBHOOK_SECRET`, `CRON_SECRET`
+   - Settings: `APP_TIMEZONE=Asia/Kolkata`, `NODE_VERSION=22`
+4. **Scheduler:** at [cron-job.org](https://cron-job.org) (free), create a job that calls `https://<your-site>/api/cron?key=<CRON_SECRET>` **every 5 minutes**.
+   - The first call registers the webhook with Telegram.
+   - Opening that URL yourself shows the result, e.g. `"webhook": "registered"`.
+5. **Don't run `npm run bot` against the same bot token.** It refuses to start while the live site holds the webhook. For local development, use a separate test bot.
+
+If you'd rather run the bot as its own always-on Background Worker (Render Starter plan), use `npm run bot` as the worker's start command and leave `TELEGRAM_WEBHOOK_SECRET` unset on the web service.
 
 ## Production
 
