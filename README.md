@@ -180,6 +180,19 @@ People can just talk. These commands are there when someone wants to be exact:
 - **Bot ignores normal messages:** privacy mode is still on. Use `/setprivacy` → Disable in @BotFather, then remove the bot from the group and add it back.
 - **`409 Conflict` from the bot:** two copies are running. Stop one.
 
+## Deploy on Render
+
+[`render.yaml`](render.yaml) is a Render Blueprint that creates both parts:
+
+| Service | Type | Plan |
+|---|---|---|
+| `tasktrack-web` | Web Service: the website | Free (sleeps after 15 minutes idle); Starter to keep it always on |
+| `tasktrack-bot` | Background Worker: the Telegram bot | Starter (workers have no free plan) |
+
+1. **MongoDB Atlas:** go to Network Access → Add IP Address → **Allow access from anywhere** (`0.0.0.0/0`). Render's outgoing IP addresses change.
+2. **Create the services:** Render → **New → Blueprint** → connect this repo → Apply. Render asks for the secret values: `MONGODB_URI`, `TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `ADMIN_EMAILS`, `TELEGRAM_BOT_USERNAME`, and `APP_URL` (the site's `https://….onrender.com` address).
+3. **Stop any local copy of the bot.** Only one copy can run, or Telegram returns `409 Conflict`.
+
 ## Production
 
 ```bash

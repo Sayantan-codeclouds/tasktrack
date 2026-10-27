@@ -1,0 +1,67 @@
+# Render Blueprint — creates the website and the Telegram bot in one go.
+# Render dashboard → New → Blueprint → pick this repo. Values marked `sync: false`
+# are asked for once during setup (they're secrets, so they never live in the repo).
+
+services:
+  # The website (Next.js)
+  - type: web
+    name: tasktrack-web
+    runtime: node
+    plan: free # free sleeps after 15 min idle — switch to "starter" to keep it always on
+    region: singapore
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /login
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true # random secret made by Render
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: ALLOW_REGISTRATION
+        value: "true"
+      - key: APP_URL
+        sync: false # e.g. https://tasktrack-web.onrender.com
+      - key: APP_TIMEZONE
+        value: Asia/Kolkata
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # the website uses it for "Post to group"
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+
+  # The Telegram bot — must always be running (Render has no free plan for workers)
+  - type: worker
+    name: tasktrack-bot
+    runtime: node
+    plan: starter
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm run bot
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: MONGODB_URI
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: AI_MIN_CONFIDENCE
+        value: "0.6"
+      - key: AUTO_OFFLINE_MINUTES
+        value: "240"
+      - key: APP_TIMEZONE
+        value: Asia/Kolkata
+      - key: REPORT_EOD_TIME
+        value: "19:00"
+      - key: REPORT_WORK_DAYS
+        value: "1,2,3,4,5"
+      - key: REPORT_EOW_DAY
+        value: "5"
