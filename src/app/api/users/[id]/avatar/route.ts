@@ -8,7 +8,8 @@ type Ctx = { params: Promise<{ id: string }> };
 export const GET = withUser<Ctx>(async (_req, { params, user }) => {
   const { id } = await params;
   if (!isValidObjectId(id)) return jsonError("Not found", 404);
-  const target = await User.findById(id).select("+avatar avatarType role").lean();
+  // Not .lean(): that hands back the photo as a BSON Binary, which would be sent as an empty file.
+  const target = await User.findById(id).select("+avatar avatarType role");
   // The admin doesn't exist for anyone else.
   if (!target?.avatar || !target.avatarType || (target.role === "admin" && user.role !== "admin")) return jsonError("Not found", 404);
   return new Response(new Uint8Array(target.avatar), {
