@@ -1,0 +1,70 @@
+import "./env";
+import { connectDB } from "../src/lib/db";
+import { autoOfflineIdleUsers } from "../src/lib/services";
+import { SystemStatus } from "../src/lib/models/SystemStatus";
+import { BOT_COMMANDS, createBot } from "./bot";
+import { postScheduledReports, REPORT_SCHEDULE } from "./scheduler";
+
+const token = process.env.TELEGRAM_BOT_TOKEN;
+if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+
+const AUTO_OFFLINE_MINUTES = Number(process.env.AUTO_OFFLINE_MINUTES ?? 240);
+
+const bot = createBot(token);
+
+async function main() {
+  await connectDB();
+  console.log("[bot] connected to MongoDB");
+
+  if (AUTO_OFFLINE_MINUTES > 0) {
+    setInterval(() => {
+      autoOfflineIdleUsers(AUTO_OFFLINE_MINUTES)
+        .then((n) => n && console.log(`[bot] marked ${n} idle user(s) offline`))
+        .catch((err) => console.error("[bot] auto-offline failed:", err));
+    }, 5 * 60_000);
+  }
+
+  // EOD on workdays and EOW at the end of the week, posted into each team's group.
+  setInterval(() => {
+    postScheduledReports(bot.api)
+      .then((posted) => posted.length && console.log(`[reports] posted: ${posted.join(", ")}`))
+      .catch((err) => console.error("[reports] scheduler failed:", err));
+  }, 60_000);
+  const s = REPORT_SCHEDULE;
+  console.log(`[reports] EOD at ${s.EOD_TIME} on days ${s.WORK_DAYS.join(",")} · EOW on day ${s.EOW_DAY} (${process.env.APP_TIMEZONE || "UTC"})`);
+
+  await bot.api.setMyCommands(BOT_COMMANDS);
+
+  // Heartbeat for the admin page ("is the bot running?").
+  const startedAt = new Date();
+  const beat = () =>
+    SystemStatus.updateOne(
+      { _id: "bot" },
+      {
+        $set: {
+          lastSeenAt: new Date(),
+          startedAt,
+          info: { username: bot.botInfo?.username ?? null, schedule: REPORT_SCHEDULE, timeZone: process.env.APP_TIMEZONE || "UTC" },
+        },
+      },
+      { upsert: true },
+    ).catch((err) => console.error("[bot] heartbeat failed:", err));
+  setInterval(beat, 60_000);
+
+  await bot.start({
+    // chat_member / my_chat_member let us keep team membership in sync with each group.
+    allowed_updates: ["message", "chat_member", "my_chat_member"],
+    onStart: (me) => {
+      console.log(`[bot] @${me.username} is running — groups are matched to teams via /link`);
+      void beat();
+    },
+  });
+}
+
+process.once("SIGINT", () => bot.stop());
+process.once("SIGTERM", () => bot.stop());
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
