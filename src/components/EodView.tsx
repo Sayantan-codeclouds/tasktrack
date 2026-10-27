@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, readPref, timeAgo, writePref } from "@/lib/client";
 import type { EodContent, EodPage, EodTaskRow } from "@/lib/eod";
 import { Spinner } from "./ui";
@@ -21,7 +21,11 @@ const shift = (s: string, days: number) => {
   return ymd(d);
 };
 const monday = (s: string) => shift(s, -((parse(s).getDay() + 6) % 7));
-const fmt = (s: string, o: Intl.DateTimeFormatOptions) => parse(s).toLocaleDateString(undefined, o);
+// One fixed style ("Tuesday, 27 October 2026"), the same as the PDF.
+const fmt = (s: string, o: Intl.DateTimeFormatOptions) => parse(s).toLocaleDateString("en-GB", o);
+const noop = () => () => {};
+/** False while rendering on the server: "today" there can be a different day from the viewer's. */
+const useInBrowser = () => useSyncExternalStore(noop, () => true, () => false);
 const dur = (min: number) => (min >= 60 ? `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m` : `${min}m`);
 
 const EMPTY_ROW: EodTaskRow = { ticket: "", title: "", status: "", progress: "", remarks: "" };
@@ -36,6 +40,7 @@ export default function EodView() {
   const [busy, setBusy] = useState<"load" | "save" | "reset" | "pdf" | null>("load");
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const inBrowser = useInBrowser();
 
   useEffect(() => {
     if (readPref(PERIOD_PREF) === "week") setPeriod("week");
@@ -127,6 +132,14 @@ export default function EodView() {
     setBusy("pdf");
     window.location.href = `/api/eod/pdf?period=${period}&date=${date}`;
     setTimeout(() => setBusy(null), 1500);
+  }
+
+  if (!inBrowser) {
+    return (
+      <div className="flex justify-center py-24 text-muted">
+        <Spinner className="h-6 w-6" />
+      </div>
+    );
   }
 
   const today = ymd(new Date());
