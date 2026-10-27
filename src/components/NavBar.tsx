@@ -8,7 +8,7 @@ import { PRESENCE, PRESENCE_LABEL, type Presence } from "@/lib/constants";
 import { Avatar, TelegramIcon } from "./ui";
 
 interface Props {
-  user: { name: string; presence: Presence; presenceNote: string | null; telegramLinked: boolean };
+  user: { _id: string; name: string; presence: Presence; presenceNote: string | null; telegramLinked: boolean };
   /** Team Leads (of a team) and Managers. */
   showReports?: boolean;
   /** Team Leads and Managers. */
@@ -18,6 +18,7 @@ interface Props {
 
 const LINKS = [
   { href: "/tracker", label: "Tracker" },
+  { href: "/eod", label: "EOD / EOW" },
   { href: "/reports", label: "Reports", reports: true },
   { href: "/team", label: "Team", team: true },
   { href: "/activity", label: "Activity" },
@@ -106,7 +107,7 @@ export default function NavBar({ user, showReports = false, showTeam = false, is
               aria-haspopup="menu"
               aria-expanded={open}
             >
-              <Avatar name={user.name} size={26} presence={presence} />
+              <Avatar name={user.name} id={user._id} size={26} presence={presence} />
               <span className="hidden max-w-32 truncate sm:inline">{user.name}</span>
               <svg viewBox="0 0 20 20" className="h-4 w-4 text-muted" fill="currentColor" aria-hidden>
                 <path d="M5.5 7.5 10 12l4.5-4.5" stroke="currentColor" strokeWidth="1.5" fill="none" />

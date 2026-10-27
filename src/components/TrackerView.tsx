@@ -494,7 +494,7 @@ function MemberChip({ member: m, active, onClick }: { member: Member; active: bo
         active ? "border-accent ring-2 ring-accent/20" : ""
       }`}
     >
-      <Avatar name={m.name} presence={m.presence} size={38} />
+      <Avatar name={m.name} id={m._id} presence={m.presence} size={38} />
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-sm font-medium">
           <span className="truncate">{m.name}</span>
@@ -660,7 +660,7 @@ function TicketCard({ task: t, overlay = false }: { task: TaskRow; overlay?: boo
           {t.assignee ? (
             [t.assignee, ...(t.collaborators ?? [])].slice(0, 3).map((p) => (
               <span key={p._id} className="rounded-full ring-2 ring-surface">
-                <Avatar name={p.name} size={22} />
+                <Avatar name={p.name} id={p._id} size={22} />
               </span>
             ))
           ) : (

@@ -59,7 +59,7 @@ interface Actor {
 export const rankOf = (p?: Position | null) => (p ? POSITION_RANK[p] : 0);
 
 /** Roles people can give themselves at sign-up; anything higher needs approval. */
-export const isSelfServeRole = (p: Position) => POSITION_RANK[p] < POSITION_RANK.team_lead;
+export const isSelfServeRole = (p: Position) => POSITION_RANK[p] <= POSITION_RANK.team_lead;
 
 /** Managers and above (and admin) see and act on every team's tickets. */
 export const isManagerOrAbove = (u: Actor) => u.role === "admin" || rankOf(u.position) >= POSITION_RANK.manager;
@@ -166,6 +166,7 @@ export const ACTIVITY_TYPES = [
   "member_joined",
   "member_left",
   "eod_note",
+  "user_deleted",
 ] as const;
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
@@ -205,6 +206,7 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
   member_joined: "Joined team",
   member_left: "Left team",
   eod_note: "EOD note",
+  user_deleted: "Person removed",
 };
 
 /** Team accent colours, picked in creation order. */

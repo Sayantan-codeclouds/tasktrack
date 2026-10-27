@@ -44,6 +44,7 @@ export const TYPE_STYLE: Record<ActivityType, { icon: string; tone: string }> = 
   member_joined: { icon: "↘", tone: "text-online bg-online/12" },
   member_left: { icon: "↖", tone: "text-break bg-break/12" },
   eod_note: { icon: "✍", tone: "text-accent bg-accent-soft" },
+  user_deleted: { icon: "×", tone: "text-danger bg-danger/12" },
 };
 
 export default function ActivityLog({

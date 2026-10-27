@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useAvatarVersion } from "@/lib/client";
 import {
   POSITION_GROUP,
   POSITION_LABEL,
@@ -17,7 +18,11 @@ import {
 
 const AVATAR_COLORS = ["#5c7cfa", "#20c997", "#f76707", "#be4bdb", "#1c7ed6", "#e64980", "#37b24d", "#fab005"];
 
-export function Avatar({ name, size = 36, presence }: { name: string; size?: number; presence?: Presence }) {
+/** Someone's profile photo, or their initials. Pass `id` to show the photo. */
+export function Avatar({ name, id, size = 36, presence }: { name: string; id?: string | null; size?: number; presence?: Presence }) {
+  const version = useAvatarVersion(id);
+  const [failed, setFailed] = useState<number | null>(null);
+  const photo = version !== undefined && failed !== version ? `/api/users/${id}/avatar?v=${version}` : null;
   const initials = name
     .split(/\s+/)
     .slice(0, 2)
@@ -32,6 +37,17 @@ export function Avatar({ name, size = 36, presence }: { name: string; size?: num
       >
         {initials}
       </span>
+      {photo && (
+        // eslint-disable-next-line @next/next/no-img-element -- small, private, already sized
+        <img
+          src={photo}
+          alt=""
+          width={size}
+          height={size}
+          className="absolute inset-0 h-full w-full rounded-full object-cover"
+          onError={() => setFailed(version ?? null)}
+        />
+      )}
       {presence && (
         <span
           className={`absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-surface ${presenceBg[presence]}`}

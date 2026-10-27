@@ -20,6 +20,7 @@ const GOOGLE_ERRORS: Record<string, string> = {
   google_failed: "Couldn't sign in with Google — please try again.",
   google_unverified: "Your Google email isn't verified.",
   registration_closed: "Registration is closed. Ask your manager to create your account first.",
+  blocked: "This account can't sign in to TaskTrack.",
 };
 
 function GoogleIcon() {

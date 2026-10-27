@@ -185,7 +185,7 @@ function RoleRequests({ members, onChanged }: { members: TeamMember[]; onChanged
       <ul className="divide-y divide-line">
         {requests.map((m) => (
           <li key={m._id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <Avatar name={m.name} size={32} />
+            <Avatar name={m.name} id={m._id} size={32} />
             <div className="min-w-0 flex-1">
               <p className="truncate font-medium">{m.name}</p>
               <p className="text-xs text-muted">
@@ -242,7 +242,7 @@ function MemberCard({ member: m, me, onChanged }: { member: TeamMember; me: Team
   return (
     <article className={`card flex flex-col p-4 ${isMe ? "ring-1 ring-accent/30" : ""}`}>
       <div className="flex items-start gap-3">
-        <Avatar name={m.name} presence={m.presence} size={44} />
+        <Avatar name={m.name} id={m._id} presence={m.presence} size={44} />
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-1.5 truncate font-semibold">
             <span className="truncate">{m.name}</span>

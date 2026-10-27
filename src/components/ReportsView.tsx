@@ -468,7 +468,7 @@ function PeopleDays({ report, onOpenTicket }: { report: TeamReport; nameById: Ma
         {people.map((m) => (
           <article key={m._id} className="card p-4">
             <div className="mb-3 flex items-center gap-3">
-              <Avatar name={m.name} size={32} />
+              <Avatar name={m.name} id={m._id} size={32} />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{m.name}</p>
                 <p className="truncate text-xs text-muted">{m.position ? POSITION_LABEL[m.position] : "No role"}</p>
@@ -514,7 +514,7 @@ function PeopleDays({ report, onOpenTicket }: { report: TeamReport; nameById: Ma
               <tr key={m._id}>
                 <td className="sticky left-0 z-[1] bg-surface px-4 py-2">
                   <div className="flex items-center gap-2">
-                    <Avatar name={m.name} size={24} />
+                    <Avatar name={m.name} id={m._id} size={24} />
                     <div className="min-w-0">
                       <p className="truncate font-medium">{m.name}</p>
                       <p className="truncate text-[11px] text-muted">{m.position ? POSITION_LABEL[m.position] : "No role"}</p>
@@ -557,7 +557,7 @@ function PeopleDays({ report, onOpenTicket }: { report: TeamReport; nameById: Ma
       {selected && sel && (
         <div className="border-t border-line bg-surface-2/40 p-4">
           <div className="mb-3 flex items-center gap-2">
-            <Avatar name={selected.name} size={24} />
+            <Avatar name={selected.name} id={selected._id} size={24} />
             <h4 className="font-semibold">
               {selected.name} · {fmt(sel.day, { weekday: "long", day: "numeric", month: "short" })}
             </h4>
@@ -606,7 +606,7 @@ function Who({ ids, nameById, max = 3 }: { ids: string[]; nameById: Map<string, 
     <span className="flex items-center -space-x-1.5" title={names.join(", ")}>
       {names.slice(0, max).map((n, i) => (
         <span key={i} className="rounded-full ring-2 ring-surface">
-          <Avatar name={n} size={20} />
+          <Avatar name={n} id={ids[i]} size={20} />
         </span>
       ))}
       {names.length > max && <span className="pl-2.5 text-[11px] text-muted">+{names.length - max}</span>}
@@ -778,7 +778,7 @@ function PersonCard({ m, report, maxMinutes }: { m: MemberRow; report: TeamRepor
   return (
     <article className={`card flex flex-col p-4 ${idle ? "opacity-70" : ""}`}>
       <div className="flex items-start gap-3">
-        <Avatar name={m.name} size={36} />
+        <Avatar name={m.name} id={m._id} size={36} />
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold">{m.name}</p>
           <p className="truncate text-xs text-muted">
@@ -811,7 +811,7 @@ function PersonCard({ m, report, maxMinutes }: { m: MemberRow; report: TeamRepor
         </div>
         <p className="mt-1 text-[11px] text-muted">
           Online {dur(m.onlineMinutes)} · Break {dur(m.breakMinutes)}
-          {report.period === "week" && ` · active ${m.activeDays.length}/${report.days.length} days`}
+          {report.period === "week" && ` · active ${m.activeDays.length}/${report.workDays} days`}
         </p>
       </div>
 

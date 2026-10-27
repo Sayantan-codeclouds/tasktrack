@@ -4,10 +4,14 @@ import { Team } from "./models/Team";
 import { Task } from "./models/Task";
 import { ActivityLog, type IActivityLog } from "./models/ActivityLog";
 import { User } from "./models/User";
+import { ReportDoc } from "./models/ReportDoc";
 import { POSITION_GROUP, TASK_STATUS, ticketKey, type Position, type Priority, type TaskStatus } from "./constants";
-import { addDays, appTimeZone, dayKey, formatDay, startOfDay, weekStart } from "./time";
+import { addDays, appTimeZone, dayKey, formatDay, startOfDay, weekdayOf, weekStart } from "./time";
 
 export type Period = "day" | "week";
+
+/** Days that get an EOD (0 = Sunday … 6 = Saturday). Default Mon–Fri. */
+export const reportWorkDays = () => (process.env.REPORT_WORK_DAYS ?? "1,2,3,4,5").split(",").map(Number);
 
 export interface TicketRef {
   _id: string;
@@ -94,6 +98,8 @@ export interface TeamReport {
   from: string;
   to: string;
   days: string[];
+  /** How many of `days` are working days — "active 4/5 days" on an EOW. */
+  workDays: number;
   timeZone: string;
   generatedAt: string;
   totals: { completed: number; progressUpdates: number; created: number; blocked: number; activePeople: number; eodNotes: number };
@@ -138,10 +144,16 @@ export async function buildTeamReport(
   const dayBounds = days.map((d) => ({ day: d, start: startOfDay(d, tz).getTime(), end: startOfDay(addDays(d, 1), tz).getTime() }));
 
   const teamTaskIds = await Task.find({ team: team._id }).distinct("_id");
+  const memberIds = team.members.flatMap((m) => (m.user ? [m.user._id] : []));
   const logs = (
     await ActivityLog.find({
       createdAt: { $gte: start, $lt: end },
-      $or: [{ team: team._id }, { task: { $in: teamTaskIds } }],
+      $or: [
+        { team: team._id },
+        { task: { $in: teamTaskIds } },
+        // EOD notes a member sent the bot privately (not tied to any one team).
+        { type: "eod_note", team: null, user: { $in: memberIds } },
+      ],
     })
       .sort({ createdAt: 1 })
       .lean()
@@ -321,6 +333,17 @@ export async function buildTeamReport(
     person(String(l.user)).eodNotes.push({ at: l.createdAt.toISOString(), text });
     note(String(l.user), l.createdAt, { kind: "eod", text });
   }
+  // EODs written on the EOD page count too (unless they also sent one in Telegram that day).
+  const pageEods = await ReportDoc.find({ period: "day", key: { $in: days }, user: { $in: [...people.keys()] }, summary: { $ne: "" } })
+    .select("user key summary updatedAt")
+    .lean();
+  for (const d of pageEods) {
+    const p = people.get(String(d.user));
+    if (!p || p.days[d.key]?.events.some((e) => e.kind === "eod")) continue;
+    const at = new Date(Math.min(d.updatedAt.getTime(), startOfDay(addDays(d.key, 1), tz).getTime() - 1000)).toISOString();
+    p.eodNotes.push({ at, text: d.summary });
+    dayOf(p, d.key).events.push({ at, kind: "eod", text: d.summary });
+  }
 
   // ---------- online / break time (presence is global, not per team) ----------
   const ids = [...people.keys()].map((id) => new Types.ObjectId(id));
@@ -420,6 +443,7 @@ export async function buildTeamReport(
     from,
     to,
     days,
+    workDays: period === "day" ? 1 : days.filter((d) => reportWorkDays().includes(weekdayOf(d))).length || days.length,
     timeZone: tz,
     generatedAt: new Date().toISOString(),
     totals: {
@@ -437,6 +461,12 @@ export async function buildTeamReport(
 }
 
 // ---------- CSV download ----------
+
+/** e.g. "mobile-team-eod-2026-10-27.csv" */
+export function reportFileName(r: TeamReport, ext: "csv" | "txt") {
+  const slug = r.team.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "team";
+  return `${slug}-${r.period === "day" ? "eod" : "eow"}-${r.from}.${ext}`;
+}
 
 function csvCell(v: unknown) {
   const s = v === null || v === undefined ? "" : String(v);
@@ -552,7 +582,7 @@ export function formatReportText(r: TeamReport): string {
         const bits = [
           m.completed.length && `${m.completed.length} done`,
           m.events && `${m.events} ticket action${m.events === 1 ? "" : "s"}`,
-          r.period === "week" && m.activeDays.length && `active ${m.activeDays.length}/${r.days.length} days`,
+          r.period === "week" && m.activeDays.length && `active ${m.activeDays.length}/${r.workDays} days`,
           m.onlineMinutes && `online ${formatDuration(m.onlineMinutes)}`,
           m.lateDays &&
             (r.period === "day"

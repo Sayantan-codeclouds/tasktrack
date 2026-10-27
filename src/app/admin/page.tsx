@@ -18,7 +18,7 @@ export default async function AdminPage() {
   return (
     <>
       <NavBar
-        user={{ name: user.name, presence: user.presence, presenceNote: user.presenceNote ?? null, telegramLinked: Boolean(user.telegramId) }}
+        user={{ _id: String(user._id), name: user.name, presence: user.presence, presenceNote: user.presenceNote ?? null, telegramLinked: Boolean(user.telegramId) }}
         showReports
         showTeam={canCreateTeams({ _id: String(user._id), role: user.role, position: user.position ?? null })}
         isAdmin

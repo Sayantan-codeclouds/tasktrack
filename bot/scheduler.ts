@@ -1,6 +1,6 @@
-import type { Api } from "grammy";
+import { InputFile, type Api } from "grammy";
 import { Team } from "../src/lib/models/Team";
-import { buildTeamReport, formatReportText } from "../src/lib/reports";
+import { buildTeamReport, formatReportCsv, formatReportText, reportFileName, reportWorkDays } from "../src/lib/reports";
 import { appTimeZone, localParts, weekStart } from "../src/lib/time";
 import { isHhmm } from "../src/lib/constants";
 import { adminUserIds } from "../src/lib/admin";
@@ -9,8 +9,7 @@ import { adminUserIds } from "../src/lib/admin";
 const EOD_TIME = /^\d{2}:\d{2}$/.test(process.env.REPORT_EOD_TIME ?? "") ? process.env.REPORT_EOD_TIME! : "19:00";
 /** 0 = Sunday … 6 = Saturday. Default Friday. */
 const EOW_DAY = Number(process.env.REPORT_EOW_DAY ?? 5);
-/** Days that get an EOD post. Default Mon–Fri. */
-const WORK_DAYS = (process.env.REPORT_WORK_DAYS ?? "1,2,3,4,5").split(",").map(Number);
+const WORK_DAYS = reportWorkDays();
 
 /**
  * Called every minute. Once it's past EOD_TIME on a workday, posts each connected team's EOD
@@ -41,6 +40,11 @@ export async function postScheduledReports(api: Api, now = new Date()) {
         if (!report) continue;
         await api.sendMessage(t.telegramChatId!, formatReportText(report));
         posted.push(`${t.name} ${job.period === "day" ? "EOD" : "EOW"}`);
+        // The full report as a file anyone in the group can download. The message is already out,
+        // so a failure here mustn't release the claim and post it twice.
+        await api
+          .sendDocument(t.telegramChatId!, new InputFile(Buffer.from(formatReportCsv(report), "utf8"), reportFileName(report, "csv")))
+          .catch((err) => console.error(`[reports] failed to attach ${job.period} file for ${t.name}:`, err));
       } catch (err) {
         console.error(`[reports] failed to post ${job.period} report for ${t.name}:`, err);
         // Let the next minute retry.

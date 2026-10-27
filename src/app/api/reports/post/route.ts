@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { jsonError, withUser } from "@/lib/api";
 import { Team } from "@/lib/models/Team";
-import { buildTeamReport, formatReportText } from "@/lib/reports";
+import { buildTeamReport, formatReportCsv, formatReportText, reportFileName } from "@/lib/reports";
 import { reportParams } from "@/lib/reportAccess";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { sendTelegramDocument, sendTelegramMessage } from "@/lib/telegram";
 import { adminUserIds } from "@/lib/admin";
 
 const Body = z.object({ team: z.string(), period: z.enum(["day", "week"]), date: z.string().optional() });
@@ -24,5 +24,9 @@ export const POST = withUser(async (req, { user }) => {
   } catch (err) {
     return jsonError(`Telegram: ${(err as Error).message}`, 502);
   }
+  // The message is out; the downloadable file is a bonus.
+  await sendTelegramDocument(team.telegramChatId, reportFileName(report, "csv"), formatReportCsv(report)).catch((err) =>
+    console.error("[reports] failed to attach report file:", err),
+  );
   return NextResponse.json({ ok: true });
 });

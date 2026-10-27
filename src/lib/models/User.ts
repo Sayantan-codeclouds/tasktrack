@@ -22,6 +22,11 @@ export interface IUser {
   presenceNote?: string | null;
   presenceSince: Date;
   lastSeenAt?: Date | null;
+  /** Profile photo (small square JPEG/PNG/WebP). Not loaded unless selected with "+avatar". */
+  avatar?: Buffer | null;
+  avatarType?: string | null;
+  /** Changes on every upload, so the photo URL can be cached forever. null = no photo. */
+  avatarVersion?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,6 +48,9 @@ const UserSchema = new Schema<IUser>(
     presenceNote: { type: String, default: null },
     presenceSince: { type: Date, default: () => new Date() },
     lastSeenAt: { type: Date, default: null },
+    avatar: { type: Buffer, default: null, select: false },
+    avatarType: { type: String, default: null },
+    avatarVersion: { type: Number, default: null },
   },
   { timestamps: true },
 );

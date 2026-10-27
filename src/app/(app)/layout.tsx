@@ -20,6 +20,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <>
       <NavBar
         user={{
+          _id: String(user._id),
           name: user.name,
           presence: user.presence,
           presenceNote: user.presenceNote ?? null,

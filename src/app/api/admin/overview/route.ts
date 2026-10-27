@@ -5,6 +5,7 @@ import { Task } from "@/lib/models/Task";
 import { Team } from "@/lib/models/Team";
 import { ActivityLog } from "@/lib/models/ActivityLog";
 import { SystemStatus } from "@/lib/models/SystemStatus";
+import { BlockedIdentity } from "@/lib/models/BlockedIdentity";
 import { appTimeZone, dayKey, startOfDay } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,7 @@ export const GET = withUser(async (_req, { user }) => {
 
   const tz = appTimeZone();
   const today = startOfDay(dayKey(new Date(), tz), tz);
-  const [users, tasks, teams, lastByTeam, bot] = await Promise.all([
+  const [users, tasks, teams, lastByTeam, bot, blocked] = await Promise.all([
     User.find()
       .select("name email role position presence presenceNote presenceSince lastSeenAt telegramId telegramUsername createdAt")
       .sort({ name: 1 })
@@ -28,6 +29,7 @@ export const GET = withUser(async (_req, { user }) => {
     Team.find().select("name color members.user telegramChatId telegramChatTitle reportsEnabled").sort({ name: 1 }).lean(),
     ActivityLog.aggregate<{ _id: unknown; at: Date }>([{ $match: { team: { $ne: null } } }, { $group: { _id: "$team", at: { $max: "$createdAt" } } }]),
     SystemStatus.findById("bot").lean(),
+    BlockedIdentity.find().sort({ createdAt: -1 }).lean(),
   ]);
 
   const presenceOf = new Map(users.map((u) => [String(u._id), u.presence]));
@@ -48,6 +50,7 @@ export const GET = withUser(async (_req, { user }) => {
   for (const t of tasks) if (isOpen(t) && t.assignee) openByUser.set(String(t.assignee), (openByUser.get(String(t.assignee)) ?? 0) + 1);
 
   return NextResponse.json({
+    me: String(user._id),
     bot: bot
       ? {
           online: Date.now() - new Date(bot.lastSeenAt).getTime() < BOT_STALE_MS,
@@ -106,6 +109,13 @@ export const GET = withUser(async (_req, { user }) => {
       teams: teamNamesByUser.get(String(u._id)) ?? [],
       open: openByUser.get(String(u._id)) ?? 0,
       createdAt: u.createdAt,
+    })),
+    blocked: blocked.map((b) => ({
+      _id: String(b._id),
+      name: b.name,
+      email: b.email ?? null,
+      telegram: b.telegramUsername ? `@${b.telegramUsername}` : b.telegramId ? "linked" : null,
+      createdAt: b.createdAt,
     })),
   });
 });

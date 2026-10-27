@@ -231,7 +231,7 @@ export default function TaskModal({ task, members, teams, defaultTeamId, me, onC
                               on ? "border-accent bg-accent-soft font-medium text-fg" : "border-line text-muted hover:border-accent/50 hover:text-fg"
                             }`}
                           >
-                            <Avatar name={m.name} size={20} />
+                            <Avatar name={m.name} id={m._id} size={20} />
                             {m.name}
                             {m.position && <span className="text-[10px] opacity-70">{POSITION_LABEL[m.position].split(" ").pop()}</span>}
                             {on && <span aria-hidden>✓</span>}

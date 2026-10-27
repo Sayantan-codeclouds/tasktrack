@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { api, duration, emitRefresh, timeAgo, usePolling } from "@/lib/client";
+import { api, duration, emitRefresh, reloadAvatars, timeAgo, useAvatarVersion, usePolling } from "@/lib/client";
 import { POSITION_LABEL, type Position, type Presence } from "@/lib/constants";
 import ActivityLog from "./ActivityLog";
 import { Avatar, PasswordInput, PositionBadge, PresenceBadge, Spinner, TelegramIcon } from "./ui";
@@ -69,7 +69,7 @@ export default function ProfileView() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
           <section className="card flex flex-wrap items-center gap-4 p-5">
-            <Avatar name={user.name} size={64} presence={user.presence} />
+            <PhotoPicker userId={user._id} name={user.name} presence={user.presence} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="truncate text-lg font-semibold">{user.name}</h2>
@@ -124,6 +124,109 @@ export default function ProfileView() {
 
         <ActivityLog title="My activity" userId={user._id} className="lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)]" />
       </div>
+    </div>
+  );
+}
+
+const PHOTO_PX = 256;
+
+/** Centre-crop to a square and shrink, so uploads are small (~20–40 KB) whatever the camera made. */
+async function squarePhoto(file: File): Promise<Blob> {
+  const img = await createImageBitmap(file);
+  const side = Math.min(img.width, img.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = PHOTO_PX;
+  const g = canvas.getContext("2d")!;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, PHOTO_PX, PHOTO_PX);
+  img.close();
+  const encode = (type: string) => new Promise<Blob | null>((ok) => canvas.toBlob(ok, type, 0.86));
+  // Browsers that can't write WebP hand back PNG instead — use JPEG then.
+  const webp = await encode("image/webp");
+  const blob = webp?.type === "image/webp" ? webp : await encode("image/jpeg");
+  if (!blob) throw new Error("Couldn't process that image");
+  return blob;
+}
+
+function PhotoPicker({ userId, name, presence }: { userId: string; name: string; presence: Presence }) {
+  const hasPhoto = useAvatarVersion(userId) !== undefined;
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function pick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be picked again
+    if (!file) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      let blob: Blob;
+      try {
+        blob = await squarePhoto(file);
+      } catch {
+        throw new Error("Couldn't read that image — try a JPEG or PNG");
+      }
+      const form = new FormData();
+      form.set("photo", blob, "photo");
+      const res = await fetch("/api/me/avatar", { method: "PUT", body: form });
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Upload failed");
+      await reloadAvatars();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!confirm("Remove your photo? Your initials will show instead.")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api("/api/me/avatar", { method: "DELETE" });
+      await reloadAvatars();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <button
+        type="button"
+        onClick={() => input.current?.click()}
+        disabled={busy}
+        className="group relative rounded-full focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        aria-label={hasPhoto ? "Change photo" : "Add a photo"}
+        title={hasPhoto ? "Change photo" : "Add a photo"}
+      >
+        <Avatar name={name} id={userId} size={64} presence={presence} />
+        <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/45 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+          {busy ? (
+            <Spinner className="h-5 w-5" />
+          ) : (
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M4 8h3l2-3h6l2 3h3v11H4z" strokeLinejoin="round" />
+              <circle cx="12" cy="13" r="3.5" />
+            </svg>
+          )}
+        </span>
+      </button>
+      <input ref={input} type="file" accept="image/jpeg,image/png,image/webp,image/*" className="hidden" onChange={pick} />
+      <div className="flex gap-2 text-[11px]">
+        <button type="button" className="font-medium text-accent hover:underline disabled:opacity-50" onClick={() => input.current?.click()} disabled={busy}>
+          {hasPhoto ? "Change" : "Add photo"}
+        </button>
+        {hasPhoto && (
+          <button type="button" className="text-muted hover:text-danger disabled:opacity-50" onClick={remove} disabled={busy}>
+            Remove
+          </button>
+        )}
+      </div>
+      {err && <p className="max-w-40 text-center text-[11px] text-danger">{err}</p>}
     </div>
   );
 }

@@ -228,7 +228,7 @@ function TeamSetup({ t, data, busy, run }: { t: TeamRow; data: TeamsData; busy: 
             ))}
           </select>
         ) : (
-          <p className="flex items-center gap-2 font-medium">{t.lead ? <><Avatar name={t.lead.name} size={20} /> {t.lead.name}</> : <span className="text-muted">Not set</span>}</p>
+          <p className="flex items-center gap-2 font-medium">{t.lead ? <><Avatar name={t.lead.name} id={t.lead._id} size={20} /> {t.lead.name}</> : <span className="text-muted">Not set</span>}</p>
         )}
       </div>
       <div>
@@ -243,7 +243,7 @@ function TeamSetup({ t, data, busy, run }: { t: TeamRow; data: TeamsData; busy: 
             ))}
           </select>
         ) : (
-          <p className="flex items-center gap-2 font-medium">{t.manager ? <><Avatar name={t.manager.name} size={20} /> {t.manager.name}</> : <span className="text-muted">Not set</span>}</p>
+          <p className="flex items-center gap-2 font-medium">{t.manager ? <><Avatar name={t.manager.name} id={t.manager._id} size={20} /> {t.manager.name}</> : <span className="text-muted">Not set</span>}</p>
         )}
       </div>
       <div>
@@ -450,7 +450,7 @@ function TeamCard({ team: t, data, botUsername, onChanged }: { team: TeamRow; da
               <div className="flex flex-wrap gap-1.5">
                 {s.people.map((m) => (
                   <span key={m._id} className="group flex items-center gap-2 rounded-full border border-line bg-surface py-1 pr-2.5 pl-1 text-sm">
-                    <Avatar name={m.name} size={24} presence={m.presence} />
+                    <Avatar name={m.name} id={m._id} size={24} presence={m.presence} />
                     <span className="max-w-36 truncate">{m.name}</span>
                     {m.position && s.id !== "lead" && (
                       <span className="text-[10px] text-muted">{POSITION_LABEL[m.position].split(" ")[0]}</span>

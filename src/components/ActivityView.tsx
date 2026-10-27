@@ -308,7 +308,7 @@ export default function ActivityView() {
           </SideOption>
           {peopleList.map((m) => (
             <SideOption key={m._id} active={person === m._id} onClick={() => setPerson(person === m._id ? "" : m._id)}>
-              <Avatar name={m.name} size={24} presence={m.presence} />
+              <Avatar name={m.name} id={m._id} size={24} presence={m.presence} />
               <span className="truncate">{m.name}</span>
             </SideOption>
           ))}
@@ -454,7 +454,7 @@ function TimelineItem({ log, last }: { log: LogRow; last: boolean }) {
       <div className="min-w-0 pb-5">
         <div className="rounded-xl px-3 py-2 transition group-hover:bg-surface-2/70">
           <div className="flex items-start gap-2.5">
-            {who && <Avatar name={who.name} size={22} />}
+            {who && <Avatar name={who.name} id={who._id} size={22} />}
             <p className="min-w-0 flex-1 text-sm leading-snug break-words">{log.message}</p>
           </div>
 

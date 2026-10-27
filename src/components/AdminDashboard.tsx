@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { duration, timeAgo, usePolling, type Member } from "@/lib/client";
+import { api, duration, timeAgo, usePolling, type Member } from "@/lib/client";
 import { PRESENCE_LABEL, type Position, type Presence } from "@/lib/constants";
 import ActivityLog from "./ActivityLog";
 import { Avatar, PositionBadge, PresenceBadge, Spinner, TelegramIcon } from "./ui";
 
 interface Overview {
+  me: string;
   bot: { online: boolean; lastSeenAt: string | null; startedAt: string | null; username: string | null };
   stats: {
     people: number;
@@ -56,14 +57,29 @@ interface Overview {
     open: number;
     createdAt: string;
   }[];
+  blocked: { _id: string; name: string; email: string | null; telegram: string | null; createdAt: string }[];
 }
+
+type Person = Overview["people"][number];
 
 const POLL_MS = 10_000;
 
 export default function AdminDashboard() {
-  const { data, error } = usePolling<Overview>("/api/admin/overview", POLL_MS);
+  const { data, error, reload } = usePolling<Overview>("/api/admin/overview", POLL_MS);
   const [search, setSearch] = useState("");
   const [presence, setPresence] = useState<Presence | "">("");
+  const [removing, setRemoving] = useState<Person | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function unblock(b: Overview["blocked"][number]) {
+    if (!confirm(`Unblock ${b.name}? They'll be able to sign up and join the Telegram groups again.`)) return;
+    try {
+      await api(`/api/admin/blocked/${b._id}`, { method: "DELETE" });
+      reload();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
 
   const people = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -98,6 +114,15 @@ export default function AdminDashboard() {
         </div>
         <BotPill bot={data.bot} />
       </div>
+
+      {notice && (
+        <p role="status" className="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm">
+          {notice}
+          <button className="text-xs text-muted hover:text-fg" onClick={() => setNotice(null)} aria-label="Dismiss">
+            ✕
+          </button>
+        </p>
+      )}
 
       {/* KPIs — numbers in ink; a small dot carries the meaning */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
@@ -238,7 +263,8 @@ export default function AdminDashboard() {
                       <th className="px-3 py-2 font-medium">Teams</th>
                       <th className="px-3 py-2 font-medium">Telegram</th>
                       <th className="px-3 py-2 text-right font-medium">Open</th>
-                      <th className="px-4 py-2 text-right font-medium">Last seen</th>
+                      <th className="px-3 py-2 text-right font-medium">Last seen</th>
+                      <th className="px-4 py-2" aria-label="Actions" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
@@ -246,7 +272,7 @@ export default function AdminDashboard() {
                       <tr key={p._id} className="hover:bg-surface-2/50">
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2.5">
-                            <Avatar name={p.name} size={28} presence={p.presence} />
+                            <Avatar name={p.name} id={p._id} size={28} presence={p.presence} />
                             <div className="min-w-0">
                               <p className="truncate font-medium">{p.name}</p>
                               <p className="truncate text-xs text-muted">{p.email}</p>
@@ -268,7 +294,14 @@ export default function AdminDashboard() {
                         <td className="px-3 py-2.5 text-xs">{p.teams.length ? p.teams.join(", ") : <span className="text-muted">—</span>}</td>
                         <td className="px-3 py-2.5 text-xs">{p.telegram ?? <span className="text-muted">Not linked</span>}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{p.open}</td>
-                        <td className="px-4 py-2.5 text-right text-xs text-muted">{timeAgo(p.lastSeenAt)}</td>
+                        <td className="px-3 py-2.5 text-right text-xs text-muted">{timeAgo(p.lastSeenAt)}</td>
+                        <td className="px-4 py-2.5 text-right">
+                          {p._id !== data.me && (
+                            <button className="rounded-md px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10" onClick={() => setRemoving(p)}>
+                              Delete
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -278,10 +311,121 @@ export default function AdminDashboard() {
               <p className="px-4 py-8 text-center text-sm text-muted">{data.people.length ? "Nobody matches." : "No one has signed up yet."}</p>
             )}
           </section>
+
+          {data.blocked.length > 0 && (
+            <section className="card overflow-hidden">
+              <div className="border-b border-line px-4 py-3">
+                <h2 className="font-semibold">
+                  Blocked <span className="font-normal text-muted">{data.blocked.length}</span>
+                </h2>
+                <p className="text-xs text-muted">Can't sign up, sign in with Google, or link Telegram.</p>
+              </div>
+              <ul className="divide-y divide-line">
+                {data.blocked.map((b) => (
+                  <li key={b._id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                    <div className="mr-auto min-w-0">
+                      <p className="truncate font-medium">{b.name}</p>
+                      <p className="truncate text-xs text-muted">
+                        {[b.email, b.telegram].filter(Boolean).join(" · ")} · blocked {timeAgo(b.createdAt)}
+                      </p>
+                    </div>
+                    <button className="btn-ghost px-2.5 py-1 text-xs" onClick={() => unblock(b)}>
+                      Unblock
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
 
         <ActivityLog members={feedMembers} viewAllHref="/activity" title="Live activity" className="xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)]" />
       </div>
+
+      {removing && (
+        <DeleteUserDialog
+          person={removing}
+          onClose={() => setRemoving(null)}
+          onDone={(msg) => {
+            setRemoving(null);
+            setNotice(msg);
+            reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function DeleteUserDialog({ person, onClose, onDone }: { person: Person; onClose: () => void; onDone: (message: string) => void }) {
+  const [block, setBlock] = useState(true);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ok = typed.trim().toLowerCase() === person.name.trim().toLowerCase();
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ok) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await api<{ name: string; blocked: boolean; bannedFrom: string[] }>(`/api/admin/users/${person._id}${block ? "?block=1" : ""}`, {
+        method: "DELETE",
+      });
+      onDone(
+        `${res.name} was deleted${res.blocked ? " and blocked" : ""}.` +
+          (res.bannedFrom.length ? ` Removed from Telegram: ${res.bannedFrom.join(", ")}.` : ""),
+      );
+    } catch (error) {
+      setErr((error as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-user-title"
+        className="card w-full max-w-md space-y-4 p-5"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+      >
+        <div>
+          <h2 id="delete-user-title" className="text-lg font-semibold">
+            Delete {person.name}?
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            They&apos;re signed out straight away and removed from every team. Their tickets stay, unassigned, and past activity is kept. This can&apos;t be undone.
+          </p>
+        </div>
+        <label className="flex items-start gap-2.5 text-sm">
+          <input type="checkbox" className="mt-0.5" checked={block} onChange={(e) => setBlock(e.target.checked)} />
+          <span>
+            <span className="font-medium">Block them too</span>
+            <span className="block text-xs text-muted">
+              {person.email}
+              {person.telegram ? ` and Telegram ${person.telegram}` : ""} can&apos;t sign up or link again
+              {person.telegram ? "; the bot also removes them from the teams' Telegram groups (it must be a group admin)" : ""}.
+            </span>
+          </span>
+        </label>
+        <label className="block text-sm">
+          Type <span className="font-semibold">{person.name}</span> to confirm
+          <input className="input mt-1" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" />
+        </label>
+        {err && <p className="text-sm text-danger">{err}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="rounded-lg bg-danger px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!ok || busy}>
+            {busy ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

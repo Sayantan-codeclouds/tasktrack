@@ -1,12 +1,15 @@
-import { Bot, type Context } from "grammy";
+import { Bot, InputFile, type Context } from "grammy";
 import type { ChatMember, UserFromGetMe } from "grammy/types";
 import type { Types } from "mongoose";
 import { User, type IUser } from "../src/lib/models/User";
+import { isBlocked } from "../src/lib/models/BlockedIdentity";
 import { Task } from "../src/lib/models/Task";
 import { Team, type ITeam } from "../src/lib/models/Team";
 import { POSITION_LABEL, TASK_STATUS_LABEL, ticketKey, type Presence, type Priority } from "../src/lib/constants";
 import { addEodNote, createTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
 import { buildTeamReport, formatReportText } from "../src/lib/reports";
+import { buildEodPage, eodFileName } from "../src/lib/eod";
+import { renderEodPdf } from "../src/lib/eodPdf";
 import { adminUserIds } from "../src/lib/admin";
 import { appTimeZone, dayKey } from "../src/lib/time";
 import {
@@ -18,6 +21,7 @@ import {
   removeMember,
   removePending,
   teamForChat,
+  teamIdsForUser,
   unlinkTeamChat,
   type TelegramPerson,
 } from "../src/lib/teams";
@@ -38,6 +42,16 @@ async function scopeOf(ctx: Context): Promise<{ ok: boolean; team: TeamDoc | nul
   if (chat.type === "private") return { ok: true, team: null };
   const team = await teamForChat(chat.id);
   return { ok: Boolean(team), team };
+}
+
+/**
+ * The team this message counts for: the group's team, or — in a private chat — the sender's team
+ * when they're in exactly one, so DM'd EOD notes and tickets still reach that team's EOD / EOW.
+ */
+async function teamIdFor(scope: { team: TeamDoc | null }, userId: Types.ObjectId) {
+  if (scope.team) return scope.team._id;
+  const ids = await teamIdsForUser(userId);
+  return ids.length === 1 ? ids[0] : null;
 }
 
 const notConnectedWarned = new Set<number>();
@@ -123,7 +137,7 @@ async function handleJoin(ctx: Context, team: TeamDoc, person: TelegramPerson, g
   if (user) {
     const added = await addMember(team._id, user._id, "telegram", { source: "telegram", teamId: team._id }, "added to the Telegram group");
     if (added && greet) await ctx.reply(`👋 Welcome ${user.name}! You're now in ${team.name} on the tracker.`);
-  } else {
+  } else if (!(await isBlocked({ telegramId: String(person.id) }))) {
     await addPending(team._id, person);
     if (greet) {
       await ctx.reply(
@@ -161,6 +175,7 @@ Commands (if you want to be exact):
 /new <title> — create a ticket for yourself
 /eod <text> — your end-of-day update (or just start a message with "EOD:")
 /report · /report week — this team's EOD / EOW summary
+/myeod · /myeod week — your own EOD / EOW as a PDF (edit it on the website's EOD / EOW page)
 /link <CODE> — link your account, or connect this group to a team
 /chatid — show this chat's id`;
 
@@ -181,6 +196,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const user = await User.findOne({ linkCode: code, linkCodeExpires: { $gt: new Date() } });
     if (user) {
       const telegramId = String(ctx.from!.id);
+      if (await isBlocked({ telegramId })) return removeCode();
       const existing = await User.findOne({ telegramId, _id: { $ne: user._id } });
       if (existing) {
         existing.telegramId = null;
@@ -339,7 +355,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
         title,
         assigneeId: user._id,
         createdById: user._id,
-        teamId: scope.team?._id ?? null,
+        teamId: await teamIdFor(scope, user._id),
         telegramChatId: String(ctx.chat.id),
         telegramMessageId: ctx.msg.message_id,
       },
@@ -360,7 +376,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     if (text.length < 2) return ctx.reply("Usage: /eod what you did today, and what's next\ne.g. /eod Finished TT-12 login, started TT-15 payments. Tomorrow: tests.");
     await touch(user, ctx);
     await ensureMember(scope.team, user);
-    await addEodNote(user._id, text, { source: "telegram", rawText: ctx.msg?.text ?? null, teamId: scope.team?._id });
+    await addEodNote(user._id, text, { source: "telegram", rawText: ctx.msg?.text ?? null, teamId: await teamIdFor(scope, user._id) });
     await react(ctx, "✍");
   });
 
@@ -375,6 +391,20 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       hideUserIds: await adminUserIds(),
     });
     if (report) await ctx.reply(formatReportText(report));
+  });
+
+  // /myeod → your EOD as a PDF, ready to forward to HR · /myeod week → your EOW
+  bot.command("myeod", async (ctx) => {
+    const user = await findSender(ctx);
+    if (!user) return warnNotLinked(ctx);
+    const period = /^w/i.test(argsOf(ctx)) ? "week" : "day";
+    const page = await buildEodPage(String(user._id), period, dayKey(new Date(), appTimeZone()));
+    if (!page) return;
+    const pdf = await renderEodPdf(page);
+    await ctx.replyWithDocument(new InputFile(pdf, eodFileName(page)), {
+      caption: `${period === "day" ? "EOD" : "EOW"} — ${user.name}${page.saved ? "" : " (automatic; edit it on the EOD / EOW page)"}`,
+      ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}),
+    });
   });
 
   // ---------- group membership → team membership ----------
@@ -513,12 +543,13 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       return;
     }
 
+    const teamId = await teamIdFor(scope, user._id);
     const actx: ActivityContext = {
       source: "telegram",
       actorId: user._id,
       rawText: text,
       aiConfidence: result.confidence,
-      teamId: team?._id,
+      teamId,
     };
     const replies: string[] = [];
     let applied = 0;
@@ -561,7 +592,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
               description: action.description,
               assigneeId,
               createdById: user._id,
-              teamId: team?._id ?? null,
+              teamId,
               collaboratorIds: (action.collaborators ?? [])
                 .map((ref) => memberRefs.find((r) => r.ref === ref)?.member._id)
                 .filter((id): id is NonNullable<typeof id> => Boolean(id)),
@@ -611,6 +642,7 @@ export const BOT_COMMANDS = [
   { command: "new", description: "Create a ticket for yourself" },
   { command: "eod", description: "Post your end-of-day update" },
   { command: "report", description: "Team EOD report (/report week for EOW)" },
+  { command: "myeod", description: "Your EOD as a PDF (/myeod week for EOW)" },
   { command: "link", description: "Link your account or connect this group" },
   { command: "help", description: "How to use the bot" },
 ];

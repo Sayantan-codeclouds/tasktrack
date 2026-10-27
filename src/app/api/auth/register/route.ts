@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { connectDB } from "@/lib/db";
 import { User } from "@/lib/models/User";
+import { isBlocked } from "@/lib/models/BlockedIdentity";
 import { hashPassword, startSession } from "@/lib/auth";
 import { handleError, jsonError } from "@/lib/api";
 import { logActivity } from "@/lib/services";
@@ -29,6 +30,9 @@ export async function POST(req: Request) {
     // Listed admins can always create their account, even when registration is closed.
     if (count > 0 && process.env.ALLOW_REGISTRATION === "false" && !isAdminEmail(body.email)) {
       return jsonError("Registration is closed. Ask your manager for an account.", 403);
+    }
+    if (await isBlocked({ email: body.email })) {
+      return jsonError("You can't create an account with this email.", 403);
     }
     if (await User.exists({ email: body.email.toLowerCase() })) {
       return jsonError("An account with this email already exists", 409);

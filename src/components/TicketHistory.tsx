@@ -80,7 +80,7 @@ export default function TicketHistory({ taskId }: { taskId: string }) {
             )}
             <span className="ml-auto flex items-center gap-1" title={`Worked on by ${[...d.people.values()].join(", ")}`}>
               {[...d.people.entries()].slice(0, 4).map(([id, name]) => (
-                <Avatar key={id} name={name} size={20} />
+                <Avatar key={id} name={name} id={id} size={20} />
               ))}
               <span className="text-[11px] text-muted">{[...d.people.values()].join(", ")}</span>
             </span>

@@ -1,0 +1,193 @@
+import { Types } from "mongoose";
+import { connectDB } from "./db";
+import { ReportDoc, type IEodContent, type IEodTaskRow } from "./models/ReportDoc";
+import { TASK_STATUS_LABEL } from "./constants";
+import { buildPersonReport, type PersonDay, type PersonReport } from "./personReport";
+import { formatDay, weekStart } from "./time";
+import type { Period } from "./reports";
+
+// A member's EOD / EOW page: an automatic draft from their day(s), which they can edit, save and download.
+// The EOW draft is put together from that week's EODs — the saved ones where they exist.
+
+export type EodContent = IEodContent;
+export type EodTaskRow = IEodTaskRow;
+
+export interface EodAttendance {
+  day: string;
+  workDay: boolean;
+  login: string;
+  logout: string;
+  onlineMinutes: number;
+  breakMinutes: number;
+  lateBy: number | null;
+}
+
+export interface EodPage {
+  period: Period;
+  from: string;
+  to: string;
+  timeZone: string;
+  generatedAt: string;
+  person: PersonReport["person"];
+  shift: PersonReport["shift"];
+  /** Saved by the person (otherwise this is the automatic draft). */
+  saved: boolean;
+  updatedAt: string | null;
+  content: EodContent;
+  /** The automatic draft, so the page can offer "reset" per field without another request. */
+  draft: EodContent;
+  attendance: EodAttendance[];
+  totals: PersonReport["totals"];
+}
+
+export const EOD_LIMITS = { text: 4000, short: 40, title: 200, rows: 60 } as const;
+
+export function clockTime(iso: string | null, tz: string) {
+  return iso ? new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "";
+}
+
+const progressText = (from: number, to: number) => (from !== to ? `${from}% → ${to}%` : `${to}%`);
+
+/** The automatic EOD for one day of a person's report. */
+function dayDraft(d: PersonDay, r: PersonReport): EodContent {
+  const tasks: EodTaskRow[] = d.tickets.map((t) => ({
+    ticket: t.key,
+    title: t.title,
+    status: TASK_STATUS_LABEL[t.status],
+    progress: progressText(t.from, t.to),
+    remarks: [t.created && "New", t.completed && "Completed"].filter(Boolean).join(", "),
+  }));
+  const notes = d.eodNotes.map((n) => n.text).join("\n\n");
+  const auto = [
+    ...d.tickets.filter((t) => t.completed).map((t) => `Completed ${t.key} ${t.title}.`),
+    ...d.tickets.filter((t) => !t.completed && t.to !== t.from).map((t) => `Worked on ${t.key} ${t.title} (${t.from}% → ${t.to}%).`),
+    ...d.tickets.filter((t) => t.created && !t.completed && t.to === t.from).map((t) => `Started ${t.key} ${t.title}.`),
+  ].join("\n");
+  const blocked = d.tickets.filter((t) => t.blocked && t.status === "blocked").map((t) => `${t.key} ${t.title}`);
+  return {
+    login: clockTime(d.firstOnline, r.timeZone),
+    logout: clockTime(d.lastOffline, r.timeZone),
+    summary: notes || auto,
+    tasks,
+    blockers: blocked.join("\n"),
+    plan: r.openTasks.map((t) => `${t.key} ${t.title} (${t.progress}%)`).join("\n"),
+  };
+}
+
+/** "10% → 40%" + "40% → 70%" → "10% → 70%". */
+function mergeProgress(first: string, last: string) {
+  const a = first.match(/^(\d+)%/);
+  const b = last.match(/(\d+)%$/);
+  return a && b ? progressText(Number(a[1]), Number(b[1])) : last || first;
+}
+
+/** The automatic EOW: the week's EODs rolled up. */
+function weekDraft(days: { day: string; content: EodContent }[], r: PersonReport): EodContent {
+  const label = (d: string) => formatDay(d, { weekday: "short", day: "numeric", month: "short" });
+  const rows = new Map<string, EodTaskRow>();
+  for (const { content } of days) {
+    for (const t of content.tasks) {
+      const k = (t.ticket || t.title).trim().toLowerCase();
+      if (!k) continue;
+      const prev = rows.get(k);
+      if (!prev) {
+        rows.set(k, { ...t });
+        continue;
+      }
+      const remarks = [...new Set([...prev.remarks.split(", "), ...t.remarks.split(", ")].filter(Boolean))].join(", ");
+      rows.set(k, { ...t, progress: mergeProgress(prev.progress, t.progress), remarks });
+    }
+  }
+  const lines = (pick: (c: EodContent) => string) =>
+    [...new Set(days.flatMap(({ content }) => pick(content).split("\n").map((l) => l.trim()).filter(Boolean)))].join("\n");
+  return {
+    login: "",
+    logout: "",
+    summary: days
+      .filter(({ content }) => content.summary.trim())
+      .map(({ day, content }) => `${label(day)}: ${content.summary.trim()}`)
+      .join("\n\n"),
+    tasks: [...rows.values()],
+    blockers: lines((c) => c.blockers),
+    plan: r.openTasks.map((t) => `${t.key} ${t.title} (${t.progress}%)`).join("\n"),
+  };
+}
+
+const contentOf = (doc: Partial<EodContent>): EodContent => ({
+  login: doc.login ?? "",
+  logout: doc.logout ?? "",
+  summary: doc.summary ?? "",
+  tasks: (doc.tasks ?? []).map((t) => ({ ticket: t.ticket ?? "", title: t.title ?? "", status: t.status ?? "", progress: t.progress ?? "", remarks: t.remarks ?? "" })),
+  blockers: doc.blockers ?? "",
+  plan: doc.plan ?? "",
+});
+
+export async function buildEodPage(userId: string, period: Period, date: string): Promise<EodPage | null> {
+  await connectDB();
+  const r = await buildPersonReport(userId, period, date);
+  if (!r) return null;
+  const user = new Types.ObjectId(userId);
+  const key = period === "day" ? r.from : weekStart(r.from);
+
+  // Each day's EOD: saved version, else the automatic one.
+  const savedDays = new Map(
+    (await ReportDoc.find({ user, period: "day", key: { $in: r.days.map((d) => d.day) } }).lean()).map((d) => [d.key, d]),
+  );
+  const days = r.days.map((d) => {
+    const saved = savedDays.get(d.day);
+    return { day: d.day, person: d, content: saved ? contentOf(saved) : dayDraft(d, r), saved: Boolean(saved) };
+  });
+
+  const draft =
+    period === "day"
+      ? dayDraft(r.days[0], r)
+      : weekDraft(
+          days.filter((d) => d.saved || d.person.tickets.length || d.person.eodNotes.length),
+          r,
+        );
+  const saved = await ReportDoc.findOne({ user, period, key }).lean();
+
+  return {
+    period,
+    from: r.from,
+    to: r.to,
+    timeZone: r.timeZone,
+    generatedAt: r.generatedAt,
+    person: r.person,
+    shift: r.shift,
+    saved: Boolean(saved),
+    updatedAt: saved ? saved.updatedAt.toISOString() : null,
+    content: saved ? contentOf(saved) : draft,
+    draft,
+    attendance: days.map(({ day, person, content }) => ({
+      day,
+      workDay: person.workDay,
+      login: content.login || clockTime(person.firstOnline, r.timeZone),
+      logout: content.logout || clockTime(person.lastOffline, r.timeZone),
+      onlineMinutes: person.onlineMinutes,
+      breakMinutes: person.breakMinutes,
+      lateBy: person.lateBy,
+    })),
+    totals: r.totals,
+  };
+}
+
+export async function saveEod(userId: string, period: Period, key: string, content: EodContent) {
+  await connectDB();
+  await ReportDoc.updateOne(
+    { user: new Types.ObjectId(userId), period, key },
+    { $set: content },
+    { upsert: true },
+  );
+}
+
+export async function resetEod(userId: string, period: Period, key: string) {
+  await connectDB();
+  await ReportDoc.deleteOne({ user: new Types.ObjectId(userId), period, key });
+}
+
+/** e.g. "eod-sayantan-das-2026-10-27.pdf" */
+export function eodFileName(p: EodPage) {
+  const slug = p.person.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "me";
+  return `${p.period === "day" ? "eod" : "eow"}-${slug}-${p.from}.pdf`;
+}

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { connectDB } from "@/lib/db";
 import { User } from "@/lib/models/User";
+import { isBlocked } from "@/lib/models/BlockedIdentity";
 import { startSession } from "@/lib/auth";
 import { OAUTH_COOKIE, finishGoogleLogin, googleEnabled } from "@/lib/google";
 import { logActivity } from "@/lib/services";
@@ -39,6 +40,7 @@ export async function GET(req: Request) {
 
   await connectDB();
   const email = profile.email.toLowerCase();
+  if (await isBlocked({ email, googleId: profile.sub })) return fail("blocked");
   let user = await User.findOne({ googleId: profile.sub });
   let isNew = false;
 

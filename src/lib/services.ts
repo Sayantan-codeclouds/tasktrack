@@ -31,6 +31,7 @@ export interface ActivityContext {
 /** Things only someone with authority can do — when the admin does them, the log says "Admin", not who. */
 const AUTHORITY_TYPES = new Set<ActivityType>([
   "role_changed",
+  "user_deleted",
   "team_created",
   "team_updated",
   "team_deleted",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ActivityType, Position, Presence, Priority, Source, TaskStatus } from "./constants";
 
 export interface Member {
@@ -195,4 +195,37 @@ export function formatDateTime(iso: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// ---------- profile photos ----------
+// One small map of who has a photo (id → version), shared by every <Avatar> on the page.
+
+let avatarVersions: Record<string, number> = {};
+let avatarsRequested = false;
+const avatarListeners = new Set<() => void>();
+
+export async function reloadAvatars() {
+  avatarsRequested = true;
+  try {
+    const { versions } = await api<{ versions: Record<string, number> }>("/api/avatars");
+    avatarVersions = versions;
+    avatarListeners.forEach((l) => l());
+  } catch {
+    // keep showing initials
+  }
+}
+
+function subscribeAvatars(listener: () => void) {
+  avatarListeners.add(listener);
+  if (!avatarsRequested) reloadAvatars();
+  return () => avatarListeners.delete(listener);
+}
+
+/** The version of someone's photo, or undefined when they have none (or before the list has loaded). */
+export function useAvatarVersion(userId: string | null | undefined) {
+  return useSyncExternalStore(
+    subscribeAvatars,
+    () => (userId ? avatarVersions[userId] : undefined),
+    () => undefined,
+  );
 }
