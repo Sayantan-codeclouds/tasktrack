@@ -1,9 +1,8 @@
 import PDFDocument from "pdfkit";
 import { formatDay } from "./time";
-import { formatDuration } from "./reports";
 import type { EodPage } from "./eod";
 
-// A clean, printable A4 EOD / EOW for HR. Uses the built-in Helvetica, so text is kept to characters it can draw.
+// A clean, printable A4 EOD / EOW for HR — the work only; attendance stays on the page. Uses the built-in Helvetica, so text is kept to characters it can draw.
 
 const INK = "#1f2430";
 const MUTED = "#6b7280";
@@ -58,50 +57,7 @@ export function renderEodPdf(p: EodPage): Promise<Buffer> {
     ["Team", p.person.teams.join(", ") || "—"],
     ["Email", p.person.email],
   ];
-  if (p.shift) who.push(["Shift", `${p.shift.start} – ${p.shift.end}`]);
   infoGrid(who);
-  doc.moveDown(0.6);
-
-  // ---------- attendance ----------
-  if (p.period === "day") {
-    const a = p.attendance[0];
-    stats([
-      ["Login", p.content.login || a?.login || "—"],
-      ["Logout", p.content.logout || a?.logout || "—"],
-      ["Online", formatDuration(a?.onlineMinutes ?? 0)],
-      ["Break", formatDuration(a?.breakMinutes ?? 0)],
-      ["Late by", a?.lateBy ? formatDuration(a.lateBy) : "On time"],
-    ]);
-  } else {
-    stats([
-      ["Days active", `${p.totals.activeDays}/${p.totals.workDays}`],
-      ["Online", formatDuration(p.totals.onlineMinutes)],
-      ["Break", formatDuration(p.totals.breakMinutes)],
-      ["Late days", String(p.totals.lateDays)],
-      ["Tickets done", String(p.totals.completed)],
-    ]);
-    heading("Attendance");
-    table(
-      [
-        { label: "Day", w: 0.28 },
-        { label: "Login", w: 0.14, align: "center" },
-        { label: "Logout", w: 0.14, align: "center" },
-        { label: "Online", w: 0.15, align: "right" },
-        { label: "Break", w: 0.14, align: "right" },
-        { label: "Late", w: 0.15, align: "right" },
-      ],
-      p.attendance
-        .filter((a) => a.workDay || a.onlineMinutes || a.login)
-        .map((a) => [
-          formatDay(a.day, { weekday: "short", day: "numeric", month: "short" }),
-          a.login || "—",
-          a.logout || "—",
-          a.onlineMinutes ? formatDuration(a.onlineMinutes) : "—",
-          a.breakMinutes ? formatDuration(a.breakMinutes) : "—",
-          a.lateBy ? formatDuration(a.lateBy) : "",
-        ]),
-    );
-  }
 
   // ---------- the editable parts ----------
   heading(p.period === "day" ? "Summary of the day" : "Summary of the week");
@@ -179,21 +135,6 @@ export function renderEodPdf(p: EodPage): Promise<Buffer> {
       doc.font("Helvetica-Bold").fontSize(10.5).fillColor(INK).text(safe(v), x, y + 11, { width: colW - 12, lineBreak: false, ellipsis: true });
     });
     doc.y = y + 30;
-    doc.x = M;
-  }
-
-  function stats(items: [string, string][]) {
-    ensure(56);
-    const gap = 8;
-    const w = (width - gap * (items.length - 1)) / items.length;
-    const y = doc.y;
-    items.forEach(([k, v], i) => {
-      const x = M + i * (w + gap);
-      doc.roundedRect(x, y, w, 48, 6).fill(SOFT);
-      doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(k.toUpperCase(), x + 10, y + 9, { width: w - 20, characterSpacing: 0.4 });
-      doc.font("Helvetica-Bold").fontSize(14).fillColor(INK).text(safe(v), x + 10, y + 23, { width: w - 20, lineBreak: false, ellipsis: true });
-    });
-    doc.y = y + 48;
     doc.x = M;
   }
 
