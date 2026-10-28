@@ -60,6 +60,8 @@ export const GET = withUser(async (_req, { user }) => {
     },
     teams,
     botUsername: process.env.TELEGRAM_BOT_USERNAME || null,
+    /** The admin is signed in as this person. */
+    adminView: Boolean(await getImpersonatorId()),
   });
 });
 

@@ -30,16 +30,21 @@ interface ProfileData {
   stats: { total: number; done: number; open: number; avgOpenProgress: number };
   teams: { _id: string; name: string; color: string; telegramChatTitle: string | null }[];
   botUsername: string | null;
+  adminView: boolean;
 }
 
 export default function ProfileView() {
   const router = useRouter();
   const { data, reload } = usePolling<ProfileData>("/api/me", 15000);
-  // Sign-in sends people without Telegram here with ?connect=telegram: walk them through linking it.
+  // Every visit while Telegram isn't linked: walk them through linking it ("Later" closes it until next time).
+  // Not in Admin view — the code it makes would let the admin's own Telegram be linked to this person.
   const [connecting, setConnecting] = useState(false);
+  const askedToConnect = useRef(false);
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("connect") === "telegram") setConnecting(true);
-  }, []);
+    if (!data || askedToConnect.current) return;
+    askedToConnect.current = true;
+    if (!data.user.telegramId && !data.adminView) setConnecting(true);
+  }, [data]);
   const closeConnect = () => {
     setConnecting(false);
     window.history.replaceState(null, "", "/profile");
