@@ -1,11 +1,11 @@
-import { Bot, InputFile, type Context } from "grammy";
+import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import type { ChatMember, UserFromGetMe } from "grammy/types";
 import type { Types } from "mongoose";
 import { User, type IUser } from "../src/lib/models/User";
 import { isBlocked } from "../src/lib/models/BlockedIdentity";
 import { Task } from "../src/lib/models/Task";
 import { Team, type ITeam } from "../src/lib/models/Team";
-import { POSITION_LABEL, TASK_STATUS_LABEL, ticketKey, type Presence, type Priority } from "../src/lib/constants";
+import { POSITION_LABEL, PRESENCE_LABEL, TASK_STATUS_LABEL, ticketKey, type Presence, type Priority } from "../src/lib/constants";
 import { addEodNote, createTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
 import { buildTeamReport, formatReportText } from "../src/lib/reports";
 import { buildEodPage, eodFileName, markEodDownloaded } from "../src/lib/eod";
@@ -202,6 +202,35 @@ async function handleLeave(team: TeamDoc, person: TelegramPerson, how: string) {
   await removePending(team._id, person.id);
 }
 
+// Notes the shared actions hand back (see noteFor / the /menu buttons).
+const SENT_PRIVATELY = "📩 Sent to you privately.";
+const NOT_LINKED = "NOT_LINKED";
+
+const PRESENCE_MARK: Record<Presence, string> = { online: "🟢", break: "☕", offline: "🔴" };
+const APP_URL = process.env.APP_URL?.replace(/\/$/, "") || null;
+
+/** The /menu buttons ("m:<action>", handled in createBot), plus a link to the tracker. */
+function menuKeyboard() {
+  const kb = new InlineKeyboard()
+    .text("🟢 Online", "m:online")
+    .text("☕ Break", "m:break")
+    .text("🔴 Offline", "m:offline")
+    .row()
+    .text("📋 My tasks", "m:tasks")
+    .text("📝 Write EOD", "m:eod")
+    .row()
+    .text("📄 My EOD (PDF)", "m:myeod")
+    .text("📄 My EOW (PDF)", "m:myeow")
+    .row()
+    .text("📊 Team EOD", "m:report")
+    .text("📊 Team EOW", "m:reportw")
+    .row()
+    .text("🔑 Forgot password", "m:forgot")
+    .text("❓ All commands", "m:help");
+  if (APP_URL) kb.row().url("🌐 Open the tracker", APP_URL);
+  return kb;
+}
+
 // ---------- the bot ----------
 
 const HELP = `I track your team's status and tickets from this chat.
@@ -215,7 +244,8 @@ Just talk normally — I'll understand things like:
 
 Teams: each team has its own group. Add people to the group and they join the team on the tracker.
 
-Commands (if you want to be exact):
+Commands (if you want to be exact) — or send /menu for buttons:
+/menu — buttons for everything below
 /online [note] · /break [note] · /offline [note]
 /tasks — your open tickets
 /progress <#> <percent> [note] — e.g. /progress 2 80
@@ -238,9 +268,56 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       if (await linkPerson(ctx, payload.slice(5).toUpperCase())) return;
       return ctx.reply("❌ That link has expired. On the tracker's Profile page, press “Open Telegram” again.");
     }
-    return ctx.reply(HELP);
+    return ctx.reply(HELP, { reply_markup: menuKeyboard() });
   });
-  bot.command("help", (ctx) => ctx.reply(HELP));
+  bot.command("help", (ctx) => ctx.reply(HELP, { reply_markup: menuKeyboard() }));
+
+  // /menu → buttons for everything. A button always acts for whoever taps it, so one menu in a group serves everyone.
+  bot.command("menu", (ctx) =>
+    ctx.reply("📋 Menu — tap a button. It acts for you, whoever posted the menu.", { reply_markup: menuKeyboard() }),
+  );
+
+  bot.callbackQuery(/^m:(\w+)$/, async (ctx) => {
+    const action = ctx.match[1];
+    let note: string | null = null;
+    switch (action) {
+      case "online":
+      case "break":
+      case "offline":
+        note = await setMyPresence(ctx, action, null, null);
+        break;
+      case "tasks":
+        note = await replyMyTasks(ctx);
+        break;
+      case "myeod":
+      case "myeow":
+        note = await sendMyEod(ctx, action === "myeod" ? "day" : "week");
+        break;
+      case "report":
+      case "reportw":
+        note = await replyTeamReport(ctx, action === "report" ? "day" : "week");
+        break;
+      case "eod":
+        await ctx.reply(
+          `📝 Write your EOD: send /eod followed by what you did (or start a message with "EOD:")` +
+            (APP_URL ? `, or fill it in on the tracker: ${APP_URL}/eod` : "."),
+          { link_preview_options: { is_disabled: true } },
+        );
+        break;
+      case "forgot":
+        note = await sendResetLink(ctx);
+        break;
+      case "help":
+        await ctx.reply(HELP);
+        break;
+    }
+    if (note === NOT_LINKED) {
+      await warnNotLinked(ctx);
+      note = "Link your Telegram first — see my message.";
+    }
+    // Long notes don't fit a pop-up: show them as an alert the person dismisses.
+    await ctx.answerCallbackQuery(note ? { text: note, show_alert: note.length > 60 } : undefined).catch(() => {});
+  });
   bot.command("chatid", (ctx) => ctx.reply(`This chat's id is ${ctx.chat.id}`));
 
   // One command for both: a person's code links their account, a team's code connects this group.
@@ -282,39 +359,54 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     await removeCode();
   });
 
+  /** Set the asker's status (from /online etc. or a /menu button). */
+  async function setMyPresence(ctx: Context, presence: Presence, note: string | null, rawText: string | null): Promise<string | null> {
+    const scope = await scopeOf(ctx);
+    if (!scope.ok) {
+      await warnNotConnected(ctx);
+      return null;
+    }
+    const user = await findSender(ctx);
+    if (!user) return NOT_LINKED;
+    await touch(user, ctx);
+    await ensureMember(scope.team, user);
+    await setPresence(user._id, presence, note, { source: "telegram", rawText, teamId: scope.team?._id });
+    return `${PRESENCE_MARK[presence]} You're ${PRESENCE_LABEL[presence].toLowerCase()}`;
+  }
+
   function presenceCommand(presence: Presence) {
     return async (ctx: Context) => {
-      const scope = await scopeOf(ctx);
-      if (!scope.ok) return warnNotConnected(ctx);
-      const user = await findSender(ctx);
-      if (!user) return warnNotLinked(ctx);
-      await touch(user, ctx);
-      await ensureMember(scope.team, user);
-      await setPresence(user._id, presence, argsOf(ctx) || null, {
-        source: "telegram",
-        rawText: ctx.msg?.text ?? null,
-        teamId: scope.team?._id,
-      });
-      await react(ctx, "👍");
+      const note = await setMyPresence(ctx, presence, argsOf(ctx) || null, ctx.msg?.text ?? null);
+      if (note === NOT_LINKED) return warnNotLinked(ctx);
+      if (note) await react(ctx, "👍");
     };
   }
   bot.command("online", presenceCommand("online"));
   bot.command("break", presenceCommand("break"));
   bot.command("offline", presenceCommand("offline"));
 
-  bot.command("tasks", async (ctx) => {
+  /** List the asker's open tickets in the chat. */
+  async function replyMyTasks(ctx: Context): Promise<string | null> {
     const scope = await scopeOf(ctx);
-    if (!scope.ok) return warnNotConnected(ctx);
+    if (!scope.ok) {
+      await warnNotConnected(ctx);
+      return null;
+    }
     const user = await findSender(ctx);
-    if (!user) return warnNotLinked(ctx);
+    if (!user) return NOT_LINKED;
     const tasks = await openTasksFor(user._id);
-    if (!tasks.length) return ctx.reply(`${user.name}, you have no open tickets 🎉`);
+    if (!tasks.length) {
+      await ctx.reply(`${user.name}, you have no open tickets 🎉`);
+      return null;
+    }
     const lines = tasks.map((t, i) => {
       const due = formatDue(t.dueDate);
       return `${i + 1}. ${ticket(t)} — ${TASK_STATUS_LABEL[t.status]}, ${t.progress}%${due ? ` (due ${due})` : ""}`;
     });
     await ctx.reply(`${user.name}'s open tickets:\n${lines.join("\n")}`);
-  });
+    return null;
+  }
+  bot.command("tasks", async (ctx) => noteFor(ctx, await replyMyTasks(ctx)));
 
   async function taskByIndex(ctx: Context, userId: Types.ObjectId, raw: string | undefined) {
     const n = Number(raw);
@@ -404,25 +496,31 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
   });
 
   // /report → today's EOD for this group's team · /report week → this week's EOW
-  bot.command("report", async (ctx) => {
+  /** Post this group's team EOD / EOW. */
+  async function replyTeamReport(ctx: Context, period: "day" | "week"): Promise<string | null> {
     const scope = await scopeOf(ctx);
     if (!scope.team) {
-      return scope.ok ? ctx.reply("Send /report inside a team's group.") : warnNotConnected(ctx);
+      if (scope.ok) return "The team report works inside a team's group.";
+      await warnNotConnected(ctx);
+      return null;
     }
-    const period = /^w/i.test(argsOf(ctx)) ? "week" : "day";
     const report = await buildTeamReport(String(scope.team._id), period, dayKey(new Date(), appTimeZone()), {
       hideUserIds: await adminUserIds(),
     });
     if (report) await ctx.reply(formatReportText(report));
-  });
+    return null;
+  }
+  bot.command("report", async (ctx) => noteFor(ctx, await replyTeamReport(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));
 
-  // /myeod → your EOD as a PDF, sent to you privately, ready to forward to HR · /myeod week → your EOW
-  bot.command("myeod", async (ctx) => {
+  // Shared by commands and /menu buttons. Each returns a short note for the person (or null when the reply
+  // itself says it all): commands post it in the chat, buttons show it as a pop-up.
+
+  /** Your EOD / EOW as a PDF, sent privately — ready to forward to HR. */
+  async function sendMyEod(ctx: Context, period: "day" | "week"): Promise<string | null> {
     const user = await findSender(ctx);
-    if (!user) return warnNotLinked(ctx);
-    const period = /^w/i.test(argsOf(ctx)) ? "week" : "day";
+    if (!user) return NOT_LINKED;
     const page = await buildEodPage(String(user._id), period, dayKey(new Date(), appTimeZone()));
-    if (!page) return;
+    if (!page) return null;
     const pdf = await renderEodPdf(page);
     const kind = period === "day" ? "EOD" : "EOW";
     const caption = `${kind} — ${user.name}${page.saved ? "" : " (automatic; edit it on the EOD / EOW page)"}`;
@@ -431,26 +529,18 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       await ctx.api.sendDocument(ctx.from!.id, new InputFile(pdf, eodFileName(page)), { caption });
     } catch {
       // Telegram won't let a bot message someone who hasn't started a chat with it.
-      if (ctx.chat?.type === "private") return;
-      await ctx.reply(`📩 ${user.name}, I can't message you privately yet — open https://t.me/${ctx.me.username}?start=eod, tap Start, then send /myeod again.`, {
-        ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}),
-        link_preview_options: { is_disabled: true },
-      });
-      return;
+      return `📩 ${user.name}, I can't message you privately yet — open https://t.me/${ctx.me.username}, tap Start, then try again.`;
     }
     await markEodDownloaded(String(user._id), page.period, page.from, "telegram");
-    if (ctx.chat?.type !== "private") await react(ctx, "👍");
-  });
+    return ctx.chat?.type === "private" ? null : SENT_PRIVATELY;
+  }
 
-  // /forgotpass → a one-time link to set a new tracker password, always sent privately.
-  // Telegram reads "/forgot-pass" as /forgot (commands can't contain "-"), so that works too.
-  bot.command(["forgot", "forgotpass", "forgot_password", "resetpassword"], async (ctx) => {
-    const reply = (text: string) =>
-      ctx.reply(text, { ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}), link_preview_options: { is_disabled: true } });
+  /** A one-time link to set a new tracker password, always sent privately. */
+  async function sendResetLink(ctx: Context): Promise<string | null> {
     const user = await findSender(ctx);
-    if (!user) return reply("Your Telegram isn't linked to a tracker account, so I can't check it's you. Ask your manager to help you get back in.");
+    if (!user) return "Your Telegram isn't linked to a tracker account, so I can't check it's you. Ask your manager to help you get back in.";
     const link = await createResetLink(user._id);
-    if ("error" in link) return reply(`❌ ${link.error}`);
+    if ("error" in link) return `❌ ${link.error}`;
     try {
       await ctx.api.sendMessage(
         ctx.from!.id,
@@ -460,11 +550,27 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
         { link_preview_options: { is_disabled: true } },
       );
     } catch {
-      // Telegram won't let a bot message someone who hasn't started a chat with it.
-      return reply(`📩 I can't message you privately yet — open https://t.me/${ctx.me.username}, tap Start, then send /forgotpass there.`);
+      return `📩 I can't message you privately yet — open https://t.me/${ctx.me.username}, tap Start, then try again.`;
     }
-    if (ctx.chat?.type !== "private") await reply("📩 Sent you a reset link privately.");
-  });
+    return ctx.chat?.type === "private" ? null : SENT_PRIVATELY;
+  }
+
+  /** Post a command's note: a 👍 when it went privately, otherwise as a reply. */
+  async function noteFor(ctx: Context, note: string | null) {
+    if (note === NOT_LINKED) return warnNotLinked(ctx);
+    if (note === SENT_PRIVATELY) return react(ctx, "👍");
+    if (note)
+      await ctx.reply(note, {
+        ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}),
+        link_preview_options: { is_disabled: true },
+      });
+  }
+
+  // /myeod → your EOD as a PDF, sent to you privately · /myeod week → your EOW
+  bot.command("myeod", async (ctx) => noteFor(ctx, await sendMyEod(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));
+
+  // /forgotpass. Telegram reads "/forgot-pass" as /forgot (commands can't contain "-"), so that works too.
+  bot.command(["forgot", "forgotpass", "forgot_password", "resetpassword"], async (ctx) => noteFor(ctx, await sendResetLink(ctx)));
 
   // ---------- group membership → team membership ----------
 
@@ -692,6 +798,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
 }
 
 export const BOT_COMMANDS = [
+  { command: "menu", description: "Buttons for everything" },
   { command: "online", description: "Set yourself online" },
   { command: "break", description: "Go on a break" },
   { command: "offline", description: "Go offline" },

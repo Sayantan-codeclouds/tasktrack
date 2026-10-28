@@ -30,7 +30,9 @@ export async function GET(req: Request) {
   if (target && process.env.TELEGRAM_WEBHOOK_SECRET) {
     try {
       const info = await bot.api.getWebhookInfo();
-      if (info.url !== target) {
+      // Also re-register when we start listening for a new kind of update (e.g. /menu button taps).
+      const missingUpdates = ALLOWED_UPDATES.some((u) => !(info.allowed_updates ?? []).includes(u));
+      if (info.url !== target || missingUpdates) {
         await bot.api.setWebhook(target, {
           secret_token: process.env.TELEGRAM_WEBHOOK_SECRET,
           allowed_updates: [...ALLOWED_UPDATES],

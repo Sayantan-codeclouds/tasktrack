@@ -67,7 +67,8 @@ async function main() {
 
   await bot.start({
     // chat_member / my_chat_member let us keep team membership in sync with each group.
-    allowed_updates: ["message", "chat_member", "my_chat_member"],
+    // callback_query: taps on the /menu buttons.
+    allowed_updates: ["message", "chat_member", "my_chat_member", "callback_query"],
     onStart: (me) => {
       console.log(`[bot] @${me.username} is running — groups are matched to teams via /link`);
       void beat();

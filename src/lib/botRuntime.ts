@@ -21,4 +21,5 @@ export const webhookUrl = () => {
 };
 
 /** The update types the bot needs (same as polling mode). */
-export const ALLOWED_UPDATES = ["message", "chat_member", "my_chat_member"] as const;
+// callback_query: taps on the /menu buttons.
+export const ALLOWED_UPDATES = ["message", "chat_member", "my_chat_member", "callback_query"] as const;
