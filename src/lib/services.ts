@@ -194,6 +194,8 @@ export async function createTask(
     createdById?: Id | null;
     dueDate?: Date | null;
     progress?: number;
+    /** Otherwise from progress: 0 → To do, 1–99 → In progress, 100 → Done. */
+    status?: TaskStatus | null;
     priority?: Priority | null;
     teamId?: Id | null;
     collaboratorIds?: Id[];
@@ -204,7 +206,9 @@ export async function createTask(
 ) {
   await connectDB();
   await ensureTicketNumbers(); // keep numbering in creation order
-  const progress = clampProgress(input.progress ?? 0);
+  const asked = clampProgress(input.progress ?? 0);
+  const status: TaskStatus = asked >= 100 ? "done" : (input.status ?? (asked > 0 ? "in_progress" : "todo"));
+  const progress = status === "done" ? 100 : asked;
   const task = await Task.create({
     number: await nextSeq("task"),
     team: input.teamId ?? ctx.teamId ?? null,
@@ -216,8 +220,8 @@ export async function createTask(
     createdBy: input.createdById ?? null,
     dueDate: input.dueDate ?? null,
     progress,
-    status: progress >= 100 ? "done" : progress > 0 ? "in_progress" : "todo",
-    completedAt: progress >= 100 ? new Date() : null,
+    status,
+    completedAt: status === "done" ? new Date() : null,
     source: ctx.source,
     telegramChatId: input.telegramChatId ?? null,
     telegramMessageId: input.telegramMessageId ?? null,

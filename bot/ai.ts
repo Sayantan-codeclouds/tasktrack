@@ -14,6 +14,7 @@ const CreateTask = z.object({
   assignee: z.string().nullish(),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   progress: z.number().min(0).max(100).nullish(),
+  status: z.enum(TASK_STATUS).nullish(),
   priority: z.enum(PRIORITY).nullish(),
   collaborators: z.array(z.string()).max(10).nullish(),
 });
@@ -74,7 +75,11 @@ Action types:
    - finished/completed/done/shipped/merged → status "done".
    - stuck/blocked/waiting on someone → status "blocked" with a note.
    - Keep progress null if no amount is implied.
-3. {"type":"create_task","title":string,"description":string|null,"assignee":"M#"|null,"collaborators":["M#",...]|null,"dueDate":"YYYY-MM-DD"|null,"progress":number|null,"priority":"low"|"medium"|"high"|"urgent"|null}
+3. {"type":"create_task","title":string,"description":string|null,"assignee":"M#"|null,"collaborators":["M#",...]|null,"dueDate":"YYYY-MM-DD"|null,"progress":number|null,"status":"todo"|"in_progress"|"blocked"|"done"|null,"priority":"low"|"medium"|"high"|"urgent"|null}
+   - status: what the message says about the new ticket — "in progress"/"working on"/"started"/"doing"/"ongoing"/"WIP" → "in_progress";
+     "blocked"/"stuck"/"on hold" → "blocked"; "done"/"completed"/"finished" → "done"; "to do"/"pending"/"not started" → "todo".
+     Messages like "Task: X — In progress" or "X (in progress)" are a new ticket X with status "in_progress" (the title is just X).
+     Null when the message doesn't say.
    - Several people on one ticket ("Priya and Ravi, build the signup page together", "designer + dev on the banner"):
      assignee = the first person named, collaborators = the others. One ticket, not one per person.
    - priority: "urgent"/"ASAP"/"critical"/"blocker" → urgent, "important"/"high priority" → high, "whenever"/"low priority" → low, otherwise null.

@@ -812,6 +812,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
                 .filter((id): id is NonNullable<typeof id> => Boolean(id)),
               dueDate: action.dueDate ? new Date(action.dueDate) : null,
               progress: action.progress ?? 0,
+              status: action.status ?? null,
               priority: action.priority ?? null,
               telegramChatId: String(ctx.chat.id),
               telegramMessageId: ctx.msg.message_id,
