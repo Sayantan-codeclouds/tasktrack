@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { canCreateTeams } from "@/lib/constants";
 import NavBar from "@/components/NavBar";
@@ -7,13 +7,10 @@ import AdminDashboard from "@/components/AdminDashboard";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Overview · TaskTrack" };
 
-/**
- * The admin's private overview. For anyone else — signed in or not — this page doesn't exist (404).
- * The admin signs in through the normal /login page.
- */
+/** The admin's private overview. Anyone else is sent to the admin sign-in (/admin/login). */
 export default async function AdminPage() {
   const user = await getCurrentUser();
-  if (!user || user.role !== "admin") notFound();
+  if (!user || user.role !== "admin") redirect("/admin/login");
 
   return (
     <>

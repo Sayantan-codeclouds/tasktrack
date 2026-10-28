@@ -59,7 +59,7 @@ export default function NavBar({ user, showReports = false, showTeam = false, is
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
-    router.replace("/login");
+    router.replace(isAdmin ? "/admin/login" : "/login");
     router.refresh();
   }
 
