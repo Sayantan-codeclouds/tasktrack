@@ -186,6 +186,8 @@ export default function EodView() {
   const kind = period === "day" ? "EOD" : "EOW";
   const viewing = people.find((p) => (viewUser ? p._id === viewUser : p.me));
   const others = people.filter((p) => !p.me);
+  /** Managers' own EOD is their teams' work. */
+  const overseer = !!viewing?.position && POSITION_GROUP[viewing.position] === "management";
 
   return (
     <div className="space-y-6 pb-24">
@@ -370,8 +372,12 @@ export default function EodView() {
           <section className="card p-4">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <div>
-                <h2 className="font-semibold">{period === "day" ? "Tasks worked on" : "Tasks this week"}</h2>
-                <p className="text-xs text-muted">From your tickets. Add anything that wasn&apos;t a ticket (meetings, reviews, calls).</p>
+                <h2 className="font-semibold">{overseer ? "Team tasks" : period === "day" ? "Tasks worked on" : "Tasks this week"}</h2>
+                <p className="text-xs text-muted">
+                  {overseer
+                    ? "Your teams' open tickets, and what was done and by whom. Add meetings, reviews or calls too."
+                    : "From your tickets. Add anything that wasn't a ticket (meetings, reviews, calls)."}
+                </p>
               </div>
               {JSON.stringify(content.tasks) !== JSON.stringify(page.draft.tasks) && (
                 <button className="text-xs text-muted hover:text-accent" onClick={() => edit({ tasks: page.draft.tasks })}>

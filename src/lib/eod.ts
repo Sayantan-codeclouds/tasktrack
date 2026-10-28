@@ -2,10 +2,14 @@ import { Types } from "mongoose";
 import { connectDB } from "./db";
 import { ReportDoc, type IEodContent, type IEodTaskRow } from "./models/ReportDoc";
 import { ReportDownload } from "./models/ReportDownload";
-import { TASK_STATUS_LABEL } from "./constants";
+import { POSITION_GROUP, TASK_STATUS, TASK_STATUS_LABEL, ticketKey } from "./constants";
+import { User } from "./models/User";
+import { Team } from "./models/Team";
+import { Task } from "./models/Task";
+import { adminUserIds } from "./admin";
 import { buildPersonReport, type PersonDay, type PersonReport } from "./personReport";
 import { formatDay, weekStart } from "./time";
-import { csvCell, type Period } from "./reports";
+import { buildTeamReport, csvCell, partsText, type Period, type TicketRow } from "./reports";
 
 // A member's EOD / EOW page: an automatic draft from their day(s), which they can edit, save and download.
 // The EOW draft is put together from that week's EODs — the saved ones where they exist.
@@ -127,6 +131,74 @@ const contentOf = (doc: Partial<EodContent>): EodContent => ({
   plan: doc.plan ?? "",
 });
 
+/**
+ * A Manager's automatic EOD / EOW: they oversee rather than work tickets, so it's their teams' work —
+ * every open ticket and everything done, and by whom. Null for everyone else.
+ */
+async function overseerDraft(userId: string, period: Period, date: string): Promise<EodContent | null> {
+  const me = await User.findById(userId).select("position").lean();
+  if (!me?.position || POSITION_GROUP[me.position] !== "management") return null;
+  const uid = new Types.ObjectId(userId);
+  // The teams they manage or are in; a Manager with no team oversees them all.
+  let teams = await Team.find({ $or: [{ manager: uid }, { "members.user": uid }] }).select("_id name").sort({ name: 1 }).lean();
+  if (!teams.length) teams = await Team.find().select("_id name").sort({ name: 1 }).lean();
+  const hide = await adminUserIds();
+
+  const tasks: EodTaskRow[] = [];
+  const summary: string[] = [];
+  const blockers: string[] = [];
+  const plan: string[] = [];
+  for (const t of teams) {
+    const r = await buildTeamReport(String(t._id), period, date, { hideUserIds: hide });
+    if (!r) continue;
+    const names = (x: TicketRow) =>
+      [...new Set([x.assignee?.name, ...x.collaborators.map((c) => c.name), ...x.contributors.map((c) => c.name)].filter(Boolean))].join(", ");
+    const prefix = teams.length > 1 ? `[${t.name}] ` : "";
+    const shown = new Set<string>();
+
+    // Tickets that moved this day / week: done first, then the rest.
+    for (const x of r.tickets) {
+      x.key.split(" + ").forEach((k) => shown.add(k));
+      tasks.push({
+        ticket: x.key,
+        title: prefix + x.title,
+        status: x.completed ? "Done" : TASK_STATUS_LABEL[x.status],
+        progress: progressText(x.start, x.end),
+        remarks: x.parts ? partsText(x) : [x.completed ? `Done by ${names(x)}` : names(x), x.isNew && "new"].filter(Boolean).join(" · "),
+      });
+    }
+    // Everything else still open on the board.
+    const open = await Task.find({ team: t._id, status: { $ne: "done" } })
+      .populate<{ assignee: { _id: Types.ObjectId; name: string } | null }>("assignee", "name")
+      .populate<{ collaborators: { _id: Types.ObjectId; name: string }[] }>("collaborators", "name")
+      .sort({ number: 1 })
+      .lean();
+    for (const o of open) {
+      if (o.assignee && hide.includes(String(o.assignee._id))) continue;
+      const key = ticketKey(o.number);
+      if (shown.has(key)) continue;
+      const who = [o.assignee, ...(o.collaborators ?? [])].filter((p) => p && !hide.includes(String(p._id))).map((p) => p!.name);
+      tasks.push({ ticket: key, title: prefix + o.title, status: TASK_STATUS_LABEL[o.status], progress: `${o.progress}%`, remarks: who.join(", ") || "Unassigned" });
+    }
+
+    const done = r.tickets.filter((x) => x.completed);
+    const counts = TASK_STATUS.filter((s) => s !== "done")
+      .map((s) => [s, open.filter((o) => o.status === s).length] as const)
+      .map(([s, n]) => `${n} ${TASK_STATUS_LABEL[s].toLowerCase()}`);
+    summary.push(
+      `${t.name}: ${done.length} completed, ${r.totals.created} new, ${counts.join(", ")}.` +
+        (done.length ? `\nCompleted: ${done.map((x) => `${x.key} ${x.title} (${names(x)})`).join("; ")}.` : "") +
+        (period === "day" && r.missingEod.length ? `\nNo EOD yet: ${r.missingEod.join(", ")}.` : ""),
+    );
+    for (const x of r.tickets.filter((x) => x.status === "blocked")) blockers.push(`${prefix}${x.key} ${x.title} — ${names(x)}`);
+    for (const o of open.filter((o) => o.status === "blocked" && !shown.has(ticketKey(o.number)))) blockers.push(`${prefix}${ticketKey(o.number)} ${o.title} — ${o.assignee?.name ?? "unassigned"}`);
+    const due = open.filter((o) => o.dueDate).sort((a, b) => a.dueDate!.getTime() - b.dueDate!.getTime()).slice(0, 5);
+    for (const o of due) plan.push(`Follow up ${ticketKey(o.number)} ${o.title} (${o.assignee?.name ?? "unassigned"}, due ${o.dueDate!.toISOString().slice(0, 10)})`);
+  }
+  if (!plan.length) plan.push("Review open tickets with the team.");
+  return { login: "", logout: "", summary: summary.join("\n\n"), tasks: tasks.slice(0, EOD_LIMITS.rows), blockers: blockers.join("\n"), plan: plan.join("\n") };
+}
+
 export async function buildEodPage(userId: string, period: Period, date: string): Promise<EodPage | null> {
   await connectDB();
   const r = await buildPersonReport(userId, period, date);
@@ -143,13 +215,16 @@ export async function buildEodPage(userId: string, period: Period, date: string)
     return { day: d.day, person: d, content: saved ? contentOf(saved) : dayDraft(d, r), saved: Boolean(saved) };
   });
 
-  const draft =
+  const own =
     period === "day"
       ? dayDraft(r.days[0], r)
       : weekDraft(
           days.filter((d) => d.saved || d.person.tickets.length || d.person.eodNotes.length),
           r,
         );
+  // Managers: their teams' work instead (keeping their own login / logout).
+  const team = await overseerDraft(userId, period, r.from);
+  const draft = team ? { ...team, login: own.login, logout: own.logout } : own;
   const [saved, download] = await Promise.all([ReportDoc.findOne({ user, period, key }).lean(), ReportDownload.findOne({ user, period, key }).lean()]);
 
   return {
