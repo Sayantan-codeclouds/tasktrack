@@ -74,7 +74,8 @@ export async function GET(req: Request) {
     { source: "web" },
   );
 
-  const res = NextResponse.redirect(new URL(isNew ? "/profile" : "/tracker", req.url));
+  // Not on Telegram yet → Profile, which walks them through linking it.
+  const res = NextResponse.redirect(new URL(user.telegramId ? "/tracker" : "/profile?connect=telegram", req.url));
   res.cookies.delete({ name: OAUTH_COOKIE, path: "/api/auth/google" });
   return res;
 }

@@ -35,6 +35,15 @@ interface ProfileData {
 export default function ProfileView() {
   const router = useRouter();
   const { data, reload } = usePolling<ProfileData>("/api/me", 15000);
+  // Sign-in sends people without Telegram here with ?connect=telegram: walk them through linking it.
+  const [connecting, setConnecting] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("connect") === "telegram") setConnecting(true);
+  }, []);
+  const closeConnect = () => {
+    setConnecting(false);
+    window.history.replaceState(null, "", "/profile");
+  };
 
   // While a link code is showing, check often so the page flips to "linked" right away.
   const waitingForLink = Boolean(data?.user.linkCode && !data.user.telegramId);
@@ -124,8 +133,133 @@ export default function ProfileView() {
 
         <ActivityLog title="My activity" userId={user._id} className="lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)]" />
       </div>
+
+      {connecting && <ConnectTelegramModal data={data} onChange={reload} onClose={closeConnect} />}
     </div>
   );
+}
+
+/** Shown after sign-in to anyone not on Telegram yet: one tap on "Open Telegram" → Start links the account. */
+function ConnectTelegramModal({ data, onChange, onClose }: { data: ProfileData; onChange: () => void; onClose: () => void }) {
+  const { user, botUsername } = data;
+  const linked = Boolean(user.telegramId);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const asking = useRef(false);
+
+  // Get a link code as soon as the dialog opens, and a fresh one if it expires (15 min) while it's open.
+  // The page checks every few seconds whether they've linked.
+  useEffect(() => {
+    if (linked || user.linkCode || asking.current || err) return;
+    asking.current = true;
+    api("/api/me/telegram", { method: "POST" })
+      .then(onChange)
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => (asking.current = false));
+  }, [linked, user.linkCode, err, onChange]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const startLink = botUsername && user.linkCode ? `https://t.me/${botUsername}?start=link_${user.linkCode}` : null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="connect-tg-title" className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+        <span className={`flex h-12 w-12 items-center justify-center rounded-2xl text-white ${linked ? "bg-online" : "bg-accent"}`}>
+          <TelegramIcon className="h-6 w-6" />
+        </span>
+
+        {linked ? (
+          <>
+            <h2 id="connect-tg-title" className="mt-4 text-lg font-semibold">
+              Telegram connected ✓
+            </h2>
+            <p className="mt-1 text-sm text-muted">
+              You&apos;re linked{user.telegramUsername ? ` as @${user.telegramUsername}` : ""}. Your messages in the team group now update your tasks and status, and EOD
+              reminders will reach you there.
+            </p>
+            <button className="btn-primary mt-5 w-full" onClick={onClose} autoFocus>
+              Done
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 id="connect-tg-title" className="mt-4 text-lg font-semibold">
+              Connect your Telegram
+            </h2>
+            <p className="mt-1 text-sm text-muted">
+              The team works through its Telegram group — your messages there update your tasks and status, and EOD reminders come there. Link it once:
+            </p>
+
+            <ol className="mt-4 space-y-3 text-sm">
+              <li className="flex gap-3">
+                <Step n={1} />
+                <div className="min-w-0 flex-1">
+                  <p>Open the bot in Telegram:</p>
+                  {startLink ? (
+                    <a href={startLink} target="_blank" rel="noreferrer" className="btn-primary mt-2 w-full">
+                      <TelegramIcon className="h-4 w-4" /> Open Telegram
+                    </a>
+                  ) : (
+                    <p className="mt-1 flex items-center gap-2 text-muted">
+                      <Spinner className="h-3 w-3" /> Getting your link…
+                    </p>
+                  )}
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <Step n={2} />
+                <p className="pt-0.5">
+                  Tap <strong>Start</strong> at the bottom of the chat. That&apos;s it — this page updates by itself.
+                </p>
+              </li>
+            </ol>
+
+            {user.linkCode && (
+              <div className="mt-5 rounded-lg bg-surface-2 p-3 text-xs text-muted">
+                No Start button, or Telegram is on another device? Send this to {botUsername ? `@${botUsername}` : "the bot"}:
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="rounded-md bg-surface px-2.5 py-1 font-mono text-sm font-semibold tracking-wider text-fg">/link {user.linkCode}</code>
+                  <button
+                    className="text-accent hover:underline"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(`/link ${user.linkCode}`).catch(() => {});
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    }}
+                  >
+                    {copied ? "Copied ✓" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {err && <p className="mt-3 text-sm text-danger">{err}</p>}
+
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <p className="flex items-center gap-2 text-xs text-muted">
+                {user.linkCode && (
+                  <>
+                    <Spinner className="h-3 w-3" /> Waiting for Telegram…
+                  </>
+                )}
+              </p>
+              <button className="btn-ghost" onClick={onClose}>
+                Later
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Step({ n }: { n: number }) {
+  return <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent">{n}</span>;
 }
 
 const PHOTO_PX = 256;
@@ -324,6 +458,11 @@ function TelegramCard({ data, onChange }: { data: ProfileData; onChange: () => v
             <button onClick={() => copy(`/link ${user.linkCode}`)} className="btn-ghost">
               {copied ? "Copied ✓" : "Copy"}
             </button>
+            {botUsername && (
+              <a href={`https://t.me/${botUsername}?start=link_${user.linkCode}`} target="_blank" rel="noreferrer" className="btn-primary">
+                <TelegramIcon className="h-4 w-4" /> Open Telegram
+              </a>
+            )}
           </div>
           <p className="mt-3 flex items-center gap-2 text-xs text-muted">
             <Spinner className="h-3 w-3" /> Waiting for you to send it… The code expires{" "}

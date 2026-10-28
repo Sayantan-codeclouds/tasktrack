@@ -78,13 +78,14 @@ export default function AuthForm({
     setBusy(true);
     setError(null);
     try {
-      await api(`/api/auth/${mode}`, {
+      const res = await api<{ telegramLinked?: boolean }>(`/api/auth/${mode}`, {
         method: "POST",
         json: isRegister
           ? { name: form.name, email: form.email, password: form.password, confirmPassword: form.confirm, position: form.position || undefined }
           : { email: form.email, password: form.password },
       });
-      router.replace(isRegister ? "/profile" : "/tracker");
+      // Not on Telegram yet → Profile, which walks them through linking it.
+      router.replace(res.telegramLinked ? "/tracker" : "/profile?connect=telegram");
       router.refresh();
     } catch (err) {
       setError((err as Error).message);

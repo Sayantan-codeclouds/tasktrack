@@ -120,6 +120,53 @@ async function warnNotLinked(ctx: Context) {
   );
 }
 
+/**
+ * Links the sender's Telegram to the tracker account that owns `code` (from Profile → Link Telegram).
+ * False if no account has that code.
+ */
+async function linkPerson(ctx: Context, code: string) {
+  const isGroup = ctx.chat?.type !== "private";
+  const user = await User.findOne({ linkCode: code, linkCodeExpires: { $gt: new Date() } });
+  if (user) {
+    const telegramId = String(ctx.from!.id);
+    if (await isBlocked({ telegramId })) return true;
+    const existing = await User.findOne({ telegramId, _id: { $ne: user._id } });
+    if (existing) {
+      existing.telegramId = null;
+      existing.telegramUsername = null;
+      await existing.save();
+    }
+    user.telegramId = telegramId;
+    user.telegramUsername = ctx.from!.username ?? null;
+    user.linkCode = null;
+    user.linkCodeExpires = null;
+    await user.save();
+    notLinkedWarned.delete(ctx.from!.id);
+
+    const team = isGroup && ctx.chat ? await teamForChat(ctx.chat.id) : null;
+    await logActivity(
+      {
+        type: "account_linked",
+        user: user._id,
+        message: `${user.name} linked Telegram${user.telegramUsername ? ` @${user.telegramUsername}` : ""}`,
+      },
+      { source: "telegram", teamId: team?._id },
+    );
+    // Join every team group they were already waiting in, plus this one.
+    const joined = await claimPendingMemberships(user._id, telegramId);
+    if (team && (await addMember(team._id, user._id, "telegram", { source: "telegram", teamId: team._id }, "linked their account"))) {
+      joined.push(team.name);
+    }
+    const teams = [...new Set(joined)];
+    await ctx.reply(
+      `✅ Linked! Hi ${user.name} — your updates will now show on the tracker.` +
+        (teams.length ? `\nYou're in: ${teams.join(", ")}` : ""),
+    );
+    return true;
+  }
+  return false;
+}
+
 /** Parses "/cmd rest of text" → "rest of text" (handles /cmd@BotName). */
 const argsOf = (ctx: Context) => (typeof ctx.match === "string" ? ctx.match.trim() : "");
 
@@ -182,7 +229,16 @@ Commands (if you want to be exact):
 export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) {
   const bot = new Bot(token, options?.botInfo ? { botInfo: options.botInfo } : undefined);
 
-  bot.command(["start", "help"], (ctx) => ctx.reply(HELP));
+  // "Open Telegram" on the Profile page opens t.me/<bot>?start=link_<CODE>: tapping Start links the account.
+  bot.command("start", async (ctx) => {
+    const payload = argsOf(ctx);
+    if (/^link_[A-Z0-9]+$/i.test(payload)) {
+      if (await linkPerson(ctx, payload.slice(5).toUpperCase())) return;
+      return ctx.reply("❌ That link has expired. On the tracker's Profile page, press “Open Telegram” again.");
+    }
+    return ctx.reply(HELP);
+  });
+  bot.command("help", (ctx) => ctx.reply(HELP));
   bot.command("chatid", (ctx) => ctx.reply(`This chat's id is ${ctx.chat.id}`));
 
   // One command for both: a person's code links their account, a team's code connects this group.
@@ -193,42 +249,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const removeCode = () => (isGroup ? ctx.deleteMessage().catch(() => {}) : undefined);
 
     // 1) A person's code
-    const user = await User.findOne({ linkCode: code, linkCodeExpires: { $gt: new Date() } });
-    if (user) {
-      const telegramId = String(ctx.from!.id);
-      if (await isBlocked({ telegramId })) return removeCode();
-      const existing = await User.findOne({ telegramId, _id: { $ne: user._id } });
-      if (existing) {
-        existing.telegramId = null;
-        existing.telegramUsername = null;
-        await existing.save();
-      }
-      user.telegramId = telegramId;
-      user.telegramUsername = ctx.from!.username ?? null;
-      user.linkCode = null;
-      user.linkCodeExpires = null;
-      await user.save();
-      notLinkedWarned.delete(ctx.from!.id);
-
-      const team = isGroup ? await teamForChat(ctx.chat.id) : null;
-      await logActivity(
-        {
-          type: "account_linked",
-          user: user._id,
-          message: `${user.name} linked Telegram${user.telegramUsername ? ` @${user.telegramUsername}` : ""}`,
-        },
-        { source: "telegram", teamId: team?._id },
-      );
-      // Join every team group they were already waiting in, plus this one.
-      const joined = await claimPendingMemberships(user._id, telegramId);
-      if (team && (await addMember(team._id, user._id, "telegram", { source: "telegram", teamId: team._id }, "linked their account"))) {
-        joined.push(team.name);
-      }
-      const teams = [...new Set(joined)];
-      await ctx.reply(
-        `✅ Linked! Hi ${user.name} — your updates will now show on the tracker.` +
-          (teams.length ? `\nYou're in: ${teams.join(", ")}` : ""),
-      );
+    if (await linkPerson(ctx, code)) {
       await removeCode();
       return;
     }

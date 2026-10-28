@@ -33,7 +33,7 @@ export async function POST(req: Request) {
       { type: "login", user: user._id, message: `${user.name} signed in to the tracker` },
       { source: "web" },
     );
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, telegramLinked: Boolean(user.telegramId) });
   } catch (err) {
     return handleError(err);
   }
