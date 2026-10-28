@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/db";
 import { SystemStatus } from "@/lib/models/SystemStatus";
-import { autoOfflineIdleUsers } from "@/lib/services";
+import { closeForgottenDays } from "@/lib/services";
 import { ALLOWED_UPDATES, getBot, webhookUrl } from "@/lib/botRuntime";
 import { BOT_COMMANDS } from "../../../../bot/bot";
-import { postScheduledReports, remindMissingEods, REPORT_SCHEDULE } from "../../../../bot/scheduler";
+import { checkAbsences, postScheduledReports, remindMissingEods, REPORT_SCHEDULE } from "../../../../bot/scheduler";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,7 @@ const startedAt = new Date();
 
 /**
  * GET /api/cron?key=<CRON_SECRET> — call every 1–5 minutes from an external scheduler (e.g. cron-job.org).
- * Keeps the webhook registered, posts due EOD/EOW reports, marks idle people offline, and records a
+ * Keeps the webhook registered, reports absences, posts due EOD/EOW reports, signs off yesterday's forgotten sessions, and records a
  * heartbeat. Calling it regularly also stops a free Render instance from going to sleep.
  */
 export async function GET(req: Request) {
@@ -50,18 +50,18 @@ export async function GET(req: Request) {
     result.webhook = `skipped — not set on the server: ${missing.join(", ")}`;
   }
 
-  // 2. Reports and auto-offline.
+  // 2. Absences, reports, and signing off anyone who forgot to go offline yesterday.
   try {
+    result.absences = await checkAbsences(bot.api);
     result.eodReminders = await remindMissingEods(bot.api);
     result.reportsPosted = await postScheduledReports(bot.api);
   } catch (err) {
     result.reports = `error: ${(err as Error).message}`;
   }
-  const idleMinutes = Number(process.env.AUTO_OFFLINE_MINUTES ?? 240);
   try {
-    result.markedOffline = await autoOfflineIdleUsers(idleMinutes);
+    result.dayEnded = await closeForgottenDays(REPORT_SCHEDULE.EOD_TIME);
   } catch (err) {
-    result.autoOffline = `error: ${(err as Error).message}`;
+    result.dayEnded = `error: ${(err as Error).message}`;
   }
 
   // 3. Heartbeat for the private overview page.

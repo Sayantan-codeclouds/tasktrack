@@ -1,14 +1,12 @@
 import "./env";
 import { connectDB } from "../src/lib/db";
-import { autoOfflineIdleUsers } from "../src/lib/services";
+import { closeForgottenDays } from "../src/lib/services";
 import { SystemStatus } from "../src/lib/models/SystemStatus";
 import { BOT_COMMANDS, createBot } from "./bot";
-import { postScheduledReports, remindMissingEods, REPORT_SCHEDULE } from "./scheduler";
+import { checkAbsences, postScheduledReports, remindMissingEods, REPORT_SCHEDULE } from "./scheduler";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
-
-const AUTO_OFFLINE_MINUTES = Number(process.env.AUTO_OFFLINE_MINUTES ?? 240);
 
 const bot = createBot(token);
 
@@ -27,16 +25,18 @@ async function main() {
     process.exit(1);
   }
 
-  if (AUTO_OFFLINE_MINUTES > 0) {
-    setInterval(() => {
-      autoOfflineIdleUsers(AUTO_OFFLINE_MINUTES)
-        .then((n) => n && console.log(`[bot] marked ${n} idle user(s) offline`))
-        .catch((err) => console.error("[bot] auto-offline failed:", err));
-    }, 5 * 60_000);
-  }
-
-  // EOD on workdays and EOW at the end of the week, posted into each team's group.
+  // Anyone still online from yesterday is signed off at their shift end.
   setInterval(() => {
+    closeForgottenDays(REPORT_SCHEDULE.EOD_TIME)
+      .then((n) => n && console.log(`[bot] ended ${n} forgotten day(s)`))
+      .catch((err) => console.error("[bot] day end failed:", err));
+  }, 5 * 60_000);
+
+  // Absences, EOD on workdays and EOW at the end of the week, posted into each team's group and to Managers.
+  setInterval(() => {
+    checkAbsences(bot.api)
+      .then((teams) => teams.length && console.log(`[reports] absence check: ${teams.join(", ")}`))
+      .catch((err) => console.error("[reports] absence check failed:", err));
     postScheduledReports(bot.api)
       .then((posted) => posted.length && console.log(`[reports] posted: ${posted.join(", ")}`))
       .catch((err) => console.error("[reports] scheduler failed:", err));

@@ -5,7 +5,9 @@ import { Task, type ITask } from "./models/Task";
 import { ActivityLog } from "./models/ActivityLog";
 import { nextSeq } from "./models/Counter";
 import { Team } from "./models/Team";
+import { addDays, appTimeZone, dayKey, startOfDay } from "./time";
 import {
+  isHhmm,
   PRESENCE_LABEL,
   PRIORITY_LABEL,
   TASK_STATUS_LABEL,
@@ -394,21 +396,26 @@ export async function addEodNote(userId: Id, text: string, ctx: ActivityContext)
   return logActivity({ type: "eod_note", user: userId, message: `${name ?? "Someone"}'s EOD: ${clean}`, meta: { text: clean } }, ctx);
 }
 
-/** Mark people offline after a period of silence. Called on an interval by the bot process. */
-export async function autoOfflineIdleUsers(idleMinutes: number) {
-  if (idleMinutes <= 0) return 0;
+/**
+ * Sign off anyone still online / on break from an earlier day (they forgot to go offline). Their day is
+ * ended at their team's shift end — or when they were last seen, if that was later — never at midnight.
+ * Nobody is marked offline for being quiet during the day. Called every few minutes.
+ */
+export async function closeForgottenDays(defaultShiftEnd: string) {
   await connectDB();
-  const cutoff = new Date(Date.now() - idleMinutes * 60_000);
-  const idle = await User.find({
-    presence: { $ne: "offline" },
-    $or: [{ lastSeenAt: { $lt: cutoff } }, { lastSeenAt: null, presenceSince: { $lt: cutoff } }],
-  }).select("_id lastSeenAt presenceSince");
-  for (const u of idle) {
-    // Reports end their online time when they were last seen, not now (up to idleMinutes later).
-    const lastSeenAt = u.lastSeenAt ?? u.presenceSince;
-    await setPresence(u._id, "offline", `No activity for ${idleMinutes} min`, { source: "system" }, lastSeenAt ? { lastSeenAt: lastSeenAt.toISOString() } : undefined);
+  const tz = appTimeZone();
+  const todayStart = startOfDay(dayKey(new Date(), tz), tz);
+  const open = await User.find({ presence: { $ne: "offline" }, presenceSince: { $lt: todayStart } }).select("_id lastSeenAt presenceSince");
+  for (const u of open) {
+    const day = dayKey(u.presenceSince, tz);
+    const ends = (await Team.find({ "members.user": u._id }).select("shiftEnd").lean()).map((t) => t.shiftEnd).filter(isHhmm);
+    const [h, m] = (ends.sort().pop() ?? defaultShiftEnd).split(":").map(Number);
+    const shiftEndAt = startOfDay(day, tz).getTime() + (h * 60 + m) * 60_000;
+    const dayEnd = startOfDay(addDays(day, 1), tz).getTime() - 60_000;
+    const endedAt = Math.min(dayEnd, Math.max(shiftEndAt, u.presenceSince.getTime(), u.lastSeenAt?.getTime() ?? 0));
+    await setPresence(u._id, "offline", "Day ended", { source: "system" }, { endedAt: new Date(endedAt).toISOString() });
   }
-  return idle.length;
+  return open.length;
 }
 
 function clampProgress(n: number) {

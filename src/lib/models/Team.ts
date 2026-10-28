@@ -42,6 +42,8 @@ export interface ITeam {
   lastEowPostedFor?: string | null;
   /** Day the "EOD in 30 minutes" reminder went out. */
   lastEodReminderFor?: string | null;
+  /** Day the "who's absent" check ran (ABSENT_AFTER_MINUTES after shift start). */
+  lastAbsenceCheckFor?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -82,6 +84,7 @@ const TeamSchema = new Schema<ITeam>(
     lastEodPostedFor: { type: String, default: null },
     lastEowPostedFor: { type: String, default: null },
     lastEodReminderFor: { type: String, default: null },
+    lastAbsenceCheckFor: { type: String, default: null },
   },
   { timestamps: true },
 );

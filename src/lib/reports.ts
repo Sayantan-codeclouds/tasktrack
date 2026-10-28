@@ -43,6 +43,16 @@ export interface TicketRow extends TicketRef {
   blocked: boolean;
   contributors: { _id: string; name: string; events: number }[];
   days: Record<string, TicketDay>;
+  /** Tickets with the same subject (e.g. design + development of one feature) are shown as one row; these are its tickets. */
+  parts?: TicketPart[];
+}
+
+export interface TicketPart extends TicketRef {
+  assignee: string | null;
+  status: TaskStatus;
+  start: number;
+  end: number;
+  completed: boolean;
 }
 
 export interface MemberRow {
@@ -61,6 +71,8 @@ export interface MemberRow {
   eodNotes: { at: string; text: string }[];
   /** Days they came online after the shift start (+ grace). */
   lateDays: number;
+  /** Work days they weren't online within ABSENT_AFTER_MINUTES of the shift start. */
+  absentDays: string[];
   /** Everything they did, day by day. */
   days: Record<string, MemberDay>;
 }
@@ -77,6 +89,10 @@ export interface MemberDay {
   breakMinutes: number;
   /** First time they went online that day. */
   firstOnline: string | null;
+  /** Last time they went offline that day. */
+  lastOffline: string | null;
+  /** Not online within ABSENT_AFTER_MINUTES of the shift start. */
+  absent: boolean;
   lastActive: string | null;
   /** Minutes after the team's shift start (only when late). */
   lateBy: number | null;
@@ -114,6 +130,8 @@ export interface TeamReport {
 const TICKET_TYPES = new Set(["task_created", "task_progress", "task_status", "task_completed"]);
 /** Coming online up to this many minutes after shift start isn't counted as late. */
 const LATE_GRACE_MIN = 10;
+/** Not online this long after the shift starts = absent that day. */
+export const ABSENT_AFTER_MIN = Number(process.env.ABSENT_AFTER_MINUTES ?? 120);
 const PRESENCE_TEXT: Record<string, string> = { online: "Online", break: "On break", offline: "Offline" };
 const STATUS_TEXT: Record<TaskStatus, string> = { todo: "To do", in_progress: "In progress", blocked: "Blocked", done: "Done" };
 const isStatus = (v: unknown): v is TaskStatus => typeof v === "string" && (TASK_STATUS as readonly string[]).includes(v);
@@ -121,15 +139,14 @@ type Meta = Record<string, unknown> | null | undefined;
 const num = (v: unknown) => (typeof v === "number" ? v : undefined);
 
 /**
- * When a status change really took effect. Auto-offline is logged when the idleness is noticed — up to
- * AUTO_OFFLINE_MINUTES after the person was last seen — so it counts from when they were last seen.
+ * When a status change really took effect. Someone who forgot to go offline is signed off the next day,
+ * but their day ended at the time stored in `endedAt` (their shift end).
  */
 export function presenceChangeAt(c: { createdAt: Date; meta?: unknown }) {
   const meta = c.meta as Meta;
   const logged = c.createdAt.getTime();
-  // Entries from before lastSeenAt was recorded are left as they were.
-  const seen = typeof meta?.lastSeenAt === "string" ? Date.parse(meta.lastSeenAt) : NaN;
-  return Number.isNaN(seen) ? logged : Math.min(seen, logged);
+  const ended = typeof meta?.endedAt === "string" ? Date.parse(meta.endedAt) : NaN;
+  return Number.isNaN(ended) ? logged : Math.min(ended, logged);
 }
 
 /** Online, or did something, on `day`. Anyone who wasn't (leave, holiday) is left alone. */
@@ -160,7 +177,10 @@ export async function buildTeamReport(
   const clipEnd = new Date(Math.min(end.getTime(), Date.now()));
 
   const team = await Team.findById(teamId)
-    .populate<{ members: { user: { _id: Types.ObjectId; name: string; position: Position | null } | null }[] }>("members.user", "name position")
+    .populate<{ members: { user: { _id: Types.ObjectId; name: string; position: Position | null; createdAt: Date } | null }[] }>(
+      "members.user",
+      "name position createdAt",
+    )
     .populate<{ lead: { _id: Types.ObjectId; name: string } | null }>("lead", "name")
     .populate<{ manager: { _id: Types.ObjectId; name: string } | null }>("manager", "name")
     .lean();
@@ -188,13 +208,13 @@ export async function buildTeamReport(
   const person = (id: string, name = "Unknown", position: Position | null = null, inTeam = false) => {
     let p = people.get(id);
     if (!p) {
-      p = { _id: id, name, position, inTeam, completed: [], progressed: [], created: [], blocked: [], events: 0, activeDays: [], onlineMinutes: 0, breakMinutes: 0, eodNotes: [], lateDays: 0, days: {} };
+      p = { _id: id, name, position, inTeam, completed: [], progressed: [], created: [], blocked: [], events: 0, activeDays: [], onlineMinutes: 0, breakMinutes: 0, eodNotes: [], lateDays: 0, absentDays: [], days: {} };
       people.set(id, p);
     }
     return p;
   };
   const dayOf = (p: MemberRow, day: string) =>
-    (p.days[day] ??= { onlineMinutes: 0, breakMinutes: 0, firstOnline: null, lastActive: null, lateBy: null, events: [] });
+    (p.days[day] ??= { onlineMinutes: 0, breakMinutes: 0, firstOnline: null, lastOffline: null, absent: false, lastActive: null, lateBy: null, events: [] });
   const note = (id: string, at: Date, e: Omit<MemberEvent, "at">) => {
     if (!id) return;
     const d = dayOf(person(id), dayKey(at, tz));
@@ -347,7 +367,8 @@ export async function buildTeamReport(
       days: dayCells,
     });
   }
-  tickets.sort((a, b) => Number(b.completed) - Number(a.completed) || b.end - b.start - (a.end - a.start) || a.key.localeCompare(b.key));
+  const rows = mergeSameSubject(tickets, days);
+  rows.sort((a, b) => Number(b.completed) - Number(a.completed) || b.end - b.start - (a.end - a.start) || a.key.localeCompare(b.key));
 
   // ---------- EOD notes ----------
   for (const l of logs) {
@@ -411,6 +432,8 @@ export async function buildTeamReport(
       if (!p) continue;
       const d = dayOf(p, dayKey(new Date(at), tz));
       if (to === "online" && !d.firstOnline) d.firstOnline = new Date(at).toISOString();
+      // Logout = going offline and staying offline; coming back clears it.
+      d.lastOffline = to === "offline" ? new Date(at).toISOString() : null;
       d.events.push({ at: new Date(at).toISOString(), kind: "presence", text: `${PRESENCE_TEXT[to] ?? to}${typeof note2 === "string" && note2 ? ` — ${note2}` : ""}` });
     }
     for (const id of people.keys()) add(id, clipEnd.getTime());
@@ -424,14 +447,28 @@ export async function buildTeamReport(
     }
   }
 
-  // Late against the team's shift start.
+  // Late against the team's shift start; absent if not online within ABSENT_AFTER_MIN of it (work days, team members).
   if (team.shiftStart) {
     const [sh, sm] = team.shiftStart.split(":").map(Number);
+    const workDays = reportWorkDays();
+    const joinedAt = new Map(team.members.flatMap((m) => (m.user ? [[String(m.user._id), new Date(m.user.createdAt).getTime()] as const] : [])));
     for (const p of people.values()) {
       for (const b of dayBounds) {
-        const d = p.days[b.day];
-        if (!d?.firstOnline) continue;
         const shiftAt = startOfDay(b.day, tz).getTime() + (sh * 60 + sm) * 60000;
+        const absentAt = shiftAt + ABSENT_AFTER_MIN * 60000;
+        const d = p.days[b.day];
+        const expected =
+          p.inTeam &&
+          !(p.position && POSITION_GROUP[p.position] === "management") &&
+          workDays.includes(weekdayOf(b.day)) &&
+          // Not before they (or the team) were on the tracker.
+          (joinedAt.get(p._id) ?? 0) <= absentAt &&
+          new Date(team.createdAt).getTime() <= absentAt;
+        if (expected && absentAt <= Date.now() && (!d?.firstOnline || new Date(d.firstOnline).getTime() > absentAt)) {
+          dayOf(p, b.day).absent = true;
+          p.absentDays.push(b.day);
+        }
+        if (!d?.firstOnline) continue;
         const lateBy = Math.round((new Date(d.firstOnline).getTime() - shiftAt) / 60000);
         if (lateBy > LATE_GRACE_MIN) {
           d.lateBy = lateBy;
@@ -469,18 +506,95 @@ export async function buildTeamReport(
     timeZone: tz,
     generatedAt: new Date().toISOString(),
     totals: {
-      completed: tickets.filter((t) => t.completed).length,
+      completed: rows.filter((t) => t.completed).length,
       progressUpdates,
-      created: tickets.filter((t) => t.isNew).length,
-      blocked: tickets.filter((t) => t.blocked).length,
+      created: rows.filter((t) => t.isNew).length,
+      blocked: rows.filter((t) => t.blocked).length,
       activePeople: members.filter((m) => m.events || m.eodNotes.length).length,
       eodNotes: members.reduce((n, m) => n + m.eodNotes.length, 0),
     },
     members,
-    tickets,
+    tickets: rows,
     missingEod,
     missingEodIds: missing.map((m) => m._id),
   };
+}
+
+// ---------- one row per subject ----------
+
+/** "Login page", "login  page." → the same subject. */
+const subjectOf = (title: string) => title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+const PRIORITY_ORDER: Priority[] = ["low", "medium", "high", "urgent"];
+
+/** Several tickets' statuses as one: done when all are done, blocked if any is, in progress once any has started. */
+function combinedStatus(statuses: TaskStatus[]): TaskStatus {
+  if (statuses.every((s) => s === "done")) return "done";
+  if (statuses.includes("blocked")) return "blocked";
+  return statuses.some((s) => s !== "todo") ? "in_progress" : "todo";
+}
+
+const avg = (ns: number[]) => Math.round(ns.reduce((a, b) => a + b, 0) / ns.length);
+
+/** Tickets with the same subject — say a designer's and a developer's "Login page" — become one row, with each ticket kept in `parts`. */
+export function mergeSameSubject(tickets: TicketRow[], days: string[]): TicketRow[] {
+  const groups = new Map<string, TicketRow[]>();
+  for (const t of tickets) {
+    const k = subjectOf(t.title) || t._id;
+    groups.set(k, [...(groups.get(k) ?? []), t]);
+  }
+  return [...groups.values()].map((g) => {
+    if (g.length === 1) return g[0];
+    g.sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
+    const first = g[0];
+    const assignee = first.assignee;
+    const people = new Map<string, { _id: string; name: string }>();
+    for (const t of g) for (const p of [t.assignee, ...t.collaborators]) if (p && p._id !== assignee?._id) people.set(p._id, p);
+    const contributors = new Map<string, { _id: string; name: string; events: number }>();
+    for (const t of g) {
+      for (const c of t.contributors) {
+        const prev = contributors.get(c._id);
+        contributors.set(c._id, { ...c, events: (prev?.events ?? 0) + c.events });
+      }
+    }
+    const cells: Record<string, TicketDay> = {};
+    for (const d of days) {
+      const cs = g.map((t) => t.days[d]).filter((c): c is TicketDay => !!c && !c.notYet);
+      cells[d] = cs.length
+        ? {
+            progress: avg(cs.map((c) => c.progress)),
+            status: combinedStatus(cs.map((c) => c.status)),
+            changed: cs.some((c) => c.changed),
+            by: [...new Set(cs.flatMap((c) => c.by))],
+            events: cs.reduce((n, c) => n + c.events, 0),
+          }
+        : { progress: 0, status: "todo", changed: false, by: [], events: 0, notYet: true };
+    }
+    return {
+      _id: first._id,
+      key: g.map((t) => t.key).join(" + "),
+      title: first.title,
+      priority: PRIORITY_ORDER[Math.max(...g.map((t) => PRIORITY_ORDER.indexOf(t.priority)))] ?? first.priority,
+      status: combinedStatus(g.map((t) => t.status)),
+      assignee,
+      collaborators: [...people.values()],
+      start: avg(g.map((t) => t.start)),
+      end: avg(g.map((t) => t.end)),
+      isNew: g.some((t) => t.isNew),
+      completed: g.every((t) => t.completed || t.status === "done") && g.some((t) => t.completed),
+      blocked: g.some((t) => t.blocked),
+      contributors: [...contributors.values()].sort((a, b) => b.events - a.events),
+      days: cells,
+      parts: g.map((t) => ({ _id: t._id, key: t.key, title: t.title, assignee: t.assignee?.name ?? null, status: t.status, start: t.start, end: t.end, completed: t.completed })),
+    };
+  });
+}
+
+/** "Avijit 100% ✓ · Sayantan 40% → 70%" — each ticket of a merged row. */
+export function partsText(t: TicketRow) {
+  return (t.parts ?? [])
+    .map((p) => `${p.assignee ?? p.key} ${p.status === "done" ? "100% ✓" : p.start !== p.end ? `${p.start}% → ${p.end}%` : `${p.end}%`}`)
+    .join(" · ");
 }
 
 // ---------- CSV download ----------
@@ -512,7 +626,7 @@ export function formatReportCsv(r: TeamReport): string {
   rows.push([r.totals.completed, r.totals.progressUpdates, r.totals.created, r.totals.blocked, r.totals.activePeople, r.totals.eodNotes]);
 
   rows.push([], ["TICKETS — progress at end of each day"]);
-  rows.push(["Ticket", "Title", "Assignee", "Collaborators", "Priority", "Status now", "Start %", "End %", ...r.days.map((d) => d), "Worked on by"]);
+  rows.push(["Ticket", "Title", "Assignee", "Collaborators", "Priority", "Status now", "Start %", "End %", ...r.days.map((d) => d), "Worked on by", "Each ticket"]);
   for (const t of r.tickets) {
     rows.push([
       t.key,
@@ -529,18 +643,19 @@ export function formatReportCsv(r: TeamReport): string {
         return c.changed ? `${c.progress}% *` : `${c.progress}%`;
       }),
       t.contributors.map((c) => `${c.name} (${c.events})`).join(", "),
+      partsText(t),
     ]);
   }
   rows.push(["", "* = changed that day"]);
 
   rows.push([], ["PEOPLE"]);
-  rows.push(["Name", "In team", "Completed", "Ticket actions", "Online (min)", "Break (min)", "Late days", "Active days", "EOD notes"]);
+  rows.push(["Name", "In team", "Completed", "Ticket actions", "Online (min)", "Break (min)", "Late days", "Absent days", "Active days", "EOD notes"]);
   for (const m of r.members) {
-    rows.push([m.name, m.inTeam ? "yes" : "no", m.completed.length, m.events, m.onlineMinutes, m.breakMinutes, m.lateDays, m.activeDays.length, m.eodNotes.map((n) => n.text).join(" | ")]);
+    rows.push([m.name, m.inTeam ? "yes" : "no", m.completed.length, m.events, m.onlineMinutes, m.breakMinutes, m.lateDays, m.absentDays.length, m.activeDays.length, m.eodNotes.map((n) => n.text).join(" | ")]);
   }
 
   rows.push([], ["PEOPLE — DAY BY DAY"]);
-  rows.push(["Name", "Day", "First online", "Late by (min)", "Online (min)", "Break (min)", "Last active", "What happened"]);
+  rows.push(["Name", "Day", "Login", "Logout", "Absent", "Late by (min)", "Online (min)", "Break (min)", "Last active", "What happened"]);
   for (const m of r.members) {
     for (const d of r.days) {
       const day = m.days[d];
@@ -549,6 +664,8 @@ export function formatReportCsv(r: TeamReport): string {
         m.name,
         d,
         time(day.firstOnline),
+        time(day.lastOffline),
+        day.absent ? "yes" : "",
         day.lateBy ?? "",
         day.onlineMinutes,
         day.breakMinutes,
@@ -582,6 +699,7 @@ export function formatReportText(r: TeamReport): string {
       ? `📋 EOD · ${r.team.name} · ${formatDay(r.from, { weekday: "short", day: "numeric", month: "short" })}`
       : `📊 EOW · ${r.team.name} · ${formatDay(r.from, { day: "numeric", month: "short" })} – ${formatDay(r.to, { day: "numeric", month: "short" })}`;
   const t = r.totals;
+  const clock = (iso: string) => new Intl.DateTimeFormat("en-GB", { timeZone: r.timeZone, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
   const out: string[] = [title];
   if (r.team.shiftStart && r.team.shiftEnd) out.push(`🕘 Shift ${r.team.shiftStart}–${r.team.shiftEnd}`);
   out.push(`✅ ${t.completed} done · 📈 ${t.progressUpdates} progress updates · 🆕 ${t.created} new · ⛔ ${t.blocked} blocked`);
@@ -592,8 +710,9 @@ export function formatReportText(r: TeamReport): string {
   const blocked = r.tickets.filter((x) => x.blocked && x.status === "blocked");
   const created = r.tickets.filter((x) => x.isNew);
 
-  if (done.length) out.push(`\n✅ Completed\n${list(done, (x) => `${x.key} ${x.title} — ${names(x.contributors) || x.assignee?.name || ""}`)}`);
-  if (moved.length) out.push(`\n📈 Progress\n${list(moved, (x) => `${x.key} ${x.title} ${x.start}% → ${x.end}% (${names(x.contributors)})`)}`);
+  if (done.length) out.push(`\n✅ Completed\n${list(done, (x) => `${x.key} ${x.title} — ${x.parts ? partsText(x) : names(x.contributors) || x.assignee?.name || ""}`)}`);
+  if (moved.length)
+    out.push(`\n📈 Progress\n${list(moved, (x) => (x.parts ? `${x.key} ${x.title} — ${partsText(x)}` : `${x.key} ${x.title} ${x.start}% → ${x.end}% (${names(x.contributors)})`))}`);
   if (blocked.length) out.push(`\n⛔ Blocked\n${list(blocked, (x) => `${x.key} ${x.title}${x.assignee ? ` — ${x.assignee.name}` : ""}`)}`);
   if (created.length) out.push(`\n🆕 New tickets\n${list(created, (x) => `${x.key} ${x.title}${x.assignee ? ` → ${x.assignee.name}` : ""}`)}`);
   if (!done.length && !moved.length && !created.length && !blocked.length) out.push("\nNo ticket updates in this period.");
@@ -602,7 +721,11 @@ export function formatReportText(r: TeamReport): string {
   if (people.length) {
     out.push(
       `\n👥 People\n${list(people, (m) => {
+        const day = r.period === "day" ? m.days[r.from] : undefined;
         const bits = [
+          day?.absent && !day.firstOnline && "🚫 absent",
+          day?.firstOnline && `login ${clock(day.firstOnline)}${day.lastOffline ? ` · logout ${clock(day.lastOffline)}` : ""}`,
+          r.period === "week" && m.absentDays.length && `🚫 absent ${m.absentDays.length} day${m.absentDays.length === 1 ? "" : "s"}`,
           m.completed.length && `${m.completed.length} done`,
           m.events && `${m.events} ticket action${m.events === 1 ? "" : "s"}`,
           r.period === "week" && m.activeDays.length && `active ${m.activeDays.length}/${r.workDays} days`,

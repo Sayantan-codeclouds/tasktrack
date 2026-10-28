@@ -605,10 +605,18 @@ function Who({ ids, nameById, max = 3 }: { ids: string[]; nameById: Map<string, 
 
 function TicketCell({ t, onOpen }: { t: TicketRow; onOpen: (t: TicketRow) => void }) {
   return (
-    <button onClick={() => onOpen(t)} className="flex min-w-0 items-center gap-2 text-left hover:text-accent">
-      <span className="font-mono text-[11px] font-semibold text-muted">{t.key}</span>
-      <span className="truncate font-medium">{t.title}</span>
-      <PriorityIcon priority={t.priority} />
+    <button onClick={() => onOpen(t)} className="flex min-w-0 flex-col items-start text-left hover:text-accent">
+      <span className="flex min-w-0 max-w-full items-center gap-2">
+        <span className="shrink-0 font-mono text-[11px] font-semibold text-muted">{t.key}</span>
+        <span className="truncate font-medium">{t.title}</span>
+        <PriorityIcon priority={t.priority} />
+      </span>
+      {/* Same subject, several tickets (e.g. design + development): each one's progress. */}
+      {t.parts && (
+        <span className="text-[11px] text-muted">
+          {t.parts.map((p) => `${p.assignee ?? p.key} ${p.status === "done" ? "✓" : `${p.end}%`}`).join(" · ")}
+        </span>
+      )}
     </button>
   );
 }
@@ -773,7 +781,11 @@ function PersonCard({ m, report, maxMinutes }: { m: MemberRow; report: TeamRepor
           <p className="truncate text-xs text-muted">
             {m.position ? POSITION_LABEL[m.position] : "No role"}
             {!m.inTeam && " · outside the team"}
-            {report.period === "day" && m.days[report.from]?.lateBy ? (
+            {report.period === "day" && m.days[report.from]?.absent ? (
+              <span className="ml-1.5 rounded bg-danger/12 px-1.5 py-px text-[10px] font-semibold text-danger">
+                🚫 Absent{m.days[report.from]!.firstOnline ? " (came later)" : ""}
+              </span>
+            ) : report.period === "day" && m.days[report.from]?.lateBy ? (
               <span className="ml-1.5 rounded bg-danger/12 px-1.5 py-px text-[10px] font-semibold text-danger">⏰ {m.days[report.from]!.lateBy}m late</span>
             ) : report.period === "week" && m.lateDays ? (
               <span className="ml-1.5 rounded bg-danger/12 px-1.5 py-px text-[10px] font-semibold text-danger">⏰ late {m.lateDays}×</span>
@@ -802,6 +814,14 @@ function PersonCard({ m, report, maxMinutes }: { m: MemberRow; report: TeamRepor
           Online {dur(m.onlineMinutes)} · Break {dur(m.breakMinutes)}
           {report.period === "week" && ` · active ${m.activeDays.length}/${report.workDays} days`}
         </p>
+        {report.period === "day" ? (
+          <p className="mt-0.5 text-[11px] text-muted">
+            Login <strong className="text-fg tabular-nums">{clock(m.days[report.from]?.firstOnline ?? null)}</strong> · Logout{" "}
+            <strong className="text-fg tabular-nums">{clock(m.days[report.from]?.lastOffline ?? null)}</strong>
+          </p>
+        ) : (
+          m.absentDays.length > 0 && <p className="mt-0.5 text-[11px] text-danger">Absent {m.absentDays.length} day{m.absentDays.length === 1 ? "" : "s"}</p>
+        )}
       </div>
 
       {(m.completed.length > 0 || m.progressed.length > 0 || m.created.length > 0 || m.blocked.length > 0) && (

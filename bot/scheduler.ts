@@ -1,11 +1,23 @@
-import { InputFile, type Api } from "grammy";
+import { InputFile, InputMediaBuilder, type Api } from "grammy";
 import { Team } from "../src/lib/models/Team";
 import { User } from "../src/lib/models/User";
-import { buildTeamReport, formatReportCsv, formatReportText, owesEod, reportFileName, reportWorkDays } from "../src/lib/reports";
+import {
+  ABSENT_AFTER_MIN,
+  buildTeamReport,
+  formatReportCsv,
+  formatReportText,
+  owesEod,
+  reportFileName,
+  reportWorkDays,
+  wasAround,
+  type TeamReport,
+} from "../src/lib/reports";
 import { ReportDownload } from "../src/lib/models/ReportDownload";
 import { appTimeZone, localParts, weekStart } from "../src/lib/time";
-import { POSITIONS, POSITION_RANK, isHhmm } from "../src/lib/constants";
+import { POSITIONS, POSITION_GROUP, POSITION_RANK, isHhmm } from "../src/lib/constants";
 import { renderTeamReportPdf } from "../src/lib/teamReportPdf";
+import { buildEodPage, eodFileName } from "../src/lib/eod";
+import { renderEodPdf } from "../src/lib/eodPdf";
 import { adminUserIds } from "../src/lib/admin";
 
 /** Default EOD time for teams without a shift end; EOW goes out at the same time on REPORT_EOW_DAY. */
@@ -25,6 +37,39 @@ async function managersOnTelegram() {
   })
     .select("name telegramId")
     .lean();
+}
+
+/** A team's EOD / EOW for a Manager or Team Lead: the summary, the team PDF, and each person's own EOD PDF. */
+export interface TeamPack {
+  text: string;
+  teamPdf: { data: Buffer; name: string };
+  people: { name: string; data: Buffer; file: string; saved: boolean }[];
+}
+
+/** Build it once, send it to as many people as needed. Only people who were around get an EOD (not anyone on leave). */
+export async function buildTeamPack(report: TeamReport, date: string): Promise<TeamPack> {
+  const people: TeamPack["people"] = [];
+  const due = report.members.filter(
+    (m) => m.inTeam && !(m.position && POSITION_GROUP[m.position] === "management") && report.days.some((d) => wasAround(m, d)),
+  );
+  for (const m of due) {
+    const page = await buildEodPage(m._id, report.period, date);
+    if (page) people.push({ name: m.name, data: await renderEodPdf(page), file: eodFileName(page), saved: page.saved });
+  }
+  return { text: formatReportText(report), teamPdf: { data: await renderTeamReportPdf(report), name: reportFileName(report, "pdf") }, people };
+}
+
+/** Send a TeamPack to one private chat. The people's PDFs go in albums of up to 10. */
+export async function sendTeamPack(api: Api, chatId: number | string, pack: TeamPack, kind: "EOD" | "EOW") {
+  await api.sendMessage(chatId, pack.text);
+  await api.sendDocument(chatId, new InputFile(pack.teamPdf.data, pack.teamPdf.name));
+  for (let i = 0; i < pack.people.length; i += 10) {
+    const batch = pack.people.slice(i, i + 10);
+    const caption = (p: TeamPack["people"][number]) => `${kind} — ${p.name}${p.saved ? "" : " (automatic, not edited)"}`;
+    // An album needs at least two files.
+    if (batch.length === 1) await api.sendDocument(chatId, new InputFile(batch[0].data, batch[0].file), { caption: caption(batch[0]) });
+    else await api.sendMediaGroup(chatId, batch.map((p) => InputMediaBuilder.document(new InputFile(p.data, p.file), { caption: caption(p) })));
+  }
 }
 
 /**
@@ -67,14 +112,14 @@ export async function postScheduledReports(api: Api, now = new Date()) {
         }
         posted.push(`${t.name} ${job.period === "day" ? "EOD" : "EOW"}`);
 
-        // Every Manager gets it privately, with the PDF. One failing (e.g. never started the bot) doesn't stop the rest.
+        // Every Manager gets it privately: the team PDF and each person's EOD PDF. One failing (e.g. never
+        // started the bot) doesn't stop the rest.
         managers ??= await managersOnTelegram();
         if (managers.length) {
-          const pdf = await renderTeamReportPdf(report);
+          const pack = await buildTeamPack(report, ymd);
           for (const m of managers) {
             try {
-              await api.sendMessage(m.telegramId!, text);
-              await api.sendDocument(m.telegramId!, new InputFile(pdf, reportFileName(report, "pdf")));
+              await sendTeamPack(api, m.telegramId!, pack, job.period === "day" ? "EOD" : "EOW");
             } catch (err) {
               console.error(`[reports] couldn't send ${t.name}'s ${job.period} report to ${m.name}:`, (err as Error).message);
             }
@@ -90,11 +135,54 @@ export async function postScheduledReports(api: Api, now = new Date()) {
   return posted;
 }
 
-/** "20:06" − 30 → "19:36" (not before midnight). */
+/** "20:06" − 30 → "19:36" (kept within the day). */
 function minus(hhmm: string, minutes: number) {
   const [h, m] = hhmm.split(":").map(Number);
-  const t = Math.max(0, h * 60 + m - minutes);
+  const t = Math.min(23 * 60 + 59, Math.max(0, h * 60 + m - minutes));
   return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Called every minute. ABSENT_AFTER_MIN after a team's shift starts, tells its Team Lead and every Manager
+ * privately who hasn't come online today — they're absent. Once a day per team, and only if someone is.
+ */
+export async function checkAbsences(api: Api, now = new Date()) {
+  const tz = appTimeZone();
+  const { ymd, hhmm, weekday } = localParts(now, tz);
+  if (!WORK_DAYS.includes(weekday) || ABSENT_AFTER_MIN <= 0) return [];
+  const checked: string[] = [];
+
+  const teams = await Team.find({ reportsEnabled: { $ne: false }, shiftStart: { $ne: null } })
+    .select("_id name lead shiftStart shiftEnd")
+    .lean();
+  let managers: Awaited<ReturnType<typeof managersOnTelegram>> | null = null;
+  for (const t of teams) {
+    if (!isHhmm(t.shiftStart)) continue;
+    const checkAt = minus(t.shiftStart, -ABSENT_AFTER_MIN);
+    // Between the check time and the EOD — waking up after the EOD skips it.
+    if (hhmm < checkAt || hhmm >= (isHhmm(t.shiftEnd) ? t.shiftEnd : EOD_TIME)) continue;
+    const claimed = await Team.updateOne({ _id: t._id, lastAbsenceCheckFor: { $ne: ymd } }, { $set: { lastAbsenceCheckFor: ymd } });
+    if (!claimed.modifiedCount) continue;
+    try {
+      const report = await buildTeamReport(String(t._id), "day", ymd, { hideUserIds: await adminUserIds() });
+      // Absent, and still not online now.
+      const absent = report?.members.filter((m) => m.days[ymd]?.absent && !m.days[ymd]?.firstOnline) ?? [];
+      checked.push(`${t.name}: ${absent.length} absent`);
+      if (!absent.length) continue;
+
+      managers ??= await managersOnTelegram();
+      const lead = t.lead ? await User.findById(t.lead).select("name telegramId").lean() : null;
+      const to = new Map([...managers, ...(lead?.telegramId ? [lead] : [])].map((p) => [p.telegramId!, p.name]));
+      const text = `🚫 Absent today — ${t.name}\nNot online by ${checkAt} (shift started ${t.shiftStart}):\n${absent.map((m) => `• ${m.name}`).join("\n")}`;
+      for (const [chatId, name] of to) {
+        await api.sendMessage(chatId, text).catch((err) => console.error(`[reports] couldn't send ${t.name}'s absences to ${name}:`, (err as Error).message));
+      }
+    } catch (err) {
+      console.error(`[reports] absence check failed for ${t.name}:`, err);
+      await Team.updateOne({ _id: t._id, lastAbsenceCheckFor: ymd }, { $set: { lastAbsenceCheckFor: null } });
+    }
+  }
+  return checked;
 }
 
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -168,4 +256,4 @@ export async function remindMissingEods(api: Api, now = new Date()) {
   return reminded;
 }
 
-export const REPORT_SCHEDULE = { EOD_TIME, EOW_DAY, WORK_DAYS, EOD_REMINDER_MINUTES };
+export const REPORT_SCHEDULE = { EOD_TIME, EOW_DAY, WORK_DAYS, EOD_REMINDER_MINUTES, ABSENT_AFTER_MIN };

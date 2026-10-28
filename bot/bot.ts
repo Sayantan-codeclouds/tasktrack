@@ -5,7 +5,17 @@ import { User, type IUser } from "../src/lib/models/User";
 import { isBlocked } from "../src/lib/models/BlockedIdentity";
 import { Task } from "../src/lib/models/Task";
 import { Team, type ITeam } from "../src/lib/models/Team";
-import { POSITION_LABEL, PRESENCE_LABEL, TASK_STATUS_LABEL, ticketKey, type Presence, type Priority } from "../src/lib/constants";
+import {
+  POSITION_LABEL,
+  POSITION_RANK,
+  PRESENCE_LABEL,
+  TASK_STATUS_LABEL,
+  isManagerOrAbove,
+  rankOf,
+  ticketKey,
+  type Presence,
+  type Priority,
+} from "../src/lib/constants";
 import { addEodNote, createTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
 import { buildTeamReport, formatReportText } from "../src/lib/reports";
 import { buildEodPage, eodFileName, markEodDownloaded } from "../src/lib/eod";
@@ -27,6 +37,7 @@ import {
 } from "../src/lib/teams";
 import { interpretMessage } from "./ai";
 import { createResetLink } from "../src/lib/passwordReset";
+import { buildTeamPack, sendTeamPack } from "./scheduler";
 
 const MIN_CONFIDENCE = Number(process.env.AI_MIN_CONFIDENCE ?? 0.6);
 const TIME_ZONE = process.env.APP_TIMEZONE || "UTC";
@@ -225,6 +236,9 @@ function menuKeyboard() {
     .text("📊 Team EOD", "m:report")
     .text("📊 Team EOW", "m:reportw")
     .row()
+    .text("📥 Everyone's EODs", "m:teameod")
+    .text("📥 Everyone's EOWs", "m:teameow")
+    .row()
     .text("🔑 Forgot password", "m:forgot")
     .text("❓ All commands", "m:help");
   if (APP_URL) kb.row().url("🌐 Open the tracker", APP_URL);
@@ -254,6 +268,7 @@ Commands (if you want to be exact) — or send /menu for buttons:
 /eod <text> — your end-of-day update (or just start a message with "EOD:")
 /report · /report week — this team's EOD / EOW summary
 /myeod · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
+/teameod · /teameod week — Team Leads and Managers: every person's EOD / EOW PDF, sent privately
 /forgotpass — forgot your tracker password? I'll send you a reset link privately
 /link <CODE> — link your account, or connect this group to a team
 /chatid — show this chat's id`;
@@ -292,6 +307,10 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       case "myeod":
       case "myeow":
         note = await sendMyEod(ctx, action === "myeod" ? "day" : "week");
+        break;
+      case "teameod":
+      case "teameow":
+        note = await sendTeamEods(ctx, action === "teameod" ? "day" : "week");
         break;
       case "report":
       case "reportw":
@@ -566,6 +585,36 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       });
   }
 
+  /**
+   * Every person's EOD / EOW PDF (plus the team PDF), sent privately: Managers get every team,
+   * Team Leads the teams they lead or are in. Managers also get this automatically at each team's EOD.
+   */
+  async function sendTeamEods(ctx: Context, period: "day" | "week"): Promise<string | null> {
+    const user = await findSender(ctx);
+    if (!user) return NOT_LINKED;
+    const me = { _id: String(user._id), role: user.role, position: user.position ?? null };
+    if (!isManagerOrAbove(me) && rankOf(me.position) < POSITION_RANK.team_lead) return "Only Team Leads and Managers can get everyone's EODs. Use /myeod for your own.";
+    const teams = await Team.find(isManagerOrAbove(me) ? {} : { $or: [{ lead: user._id }, { "members.user": user._id }] })
+      .select("_id name")
+      .sort({ name: 1 })
+      .lean();
+    if (!teams.length) return "You're not in any team yet.";
+    const date = dayKey(new Date(), appTimeZone());
+    const hide = await adminUserIds();
+    try {
+      for (const t of teams) {
+        const report = await buildTeamReport(String(t._id), period, date, { hideUserIds: hide });
+        if (report) await sendTeamPack(ctx.api, ctx.from!.id, await buildTeamPack(report, date), period === "day" ? "EOD" : "EOW");
+      }
+    } catch (err) {
+      if (/chat not found|bot was blocked|can't initiate/i.test((err as Error).message))
+        return `📩 ${user.name}, I can't message you privately yet — open https://t.me/${ctx.me.username}, tap Start, then try again.`;
+      throw err;
+    }
+    return ctx.chat?.type === "private" ? null : SENT_PRIVATELY;
+  }
+  bot.command("teameod", async (ctx) => noteFor(ctx, await sendTeamEods(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));
+
   // /myeod → your EOD as a PDF, sent to you privately · /myeod week → your EOW
   bot.command("myeod", async (ctx) => noteFor(ctx, await sendMyEod(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));
 
@@ -809,6 +858,7 @@ export const BOT_COMMANDS = [
   { command: "eod", description: "Post your end-of-day update" },
   { command: "report", description: "Team EOD report (/report week for EOW)" },
   { command: "myeod", description: "Your EOD as a PDF (/myeod week for EOW)" },
+  { command: "teameod", description: "Leads & Managers: everyone's EOD PDFs (/teameod week)" },
   { command: "forgotpass", description: "Forgot your tracker password? Get a reset link" },
   { command: "link", description: "Link your account or connect this group" },
   { command: "help", description: "How to use the bot" },

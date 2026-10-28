@@ -59,7 +59,10 @@ Telegram group ──► bot (npm run bot) ──► Groq: "what does this messa
 - [`bot/ai.ts`](bot/ai.ts) asks Groq for strict JSON with these actions: `set_status`, `update_task` and `create_task`, plus a confidence score. Actions below `AI_MIN_CONFIDENCE` are skipped, and the bot reacts 🤔.
 - [`src/lib/services.ts`](src/lib/services.ts) is the only place data changes. The bot and the web app both call it, so every change writes an activity log entry. Entries from Telegram also store the original message and the AI's confidence.
 - **Replying to a task message:** replies to the original task message, or to the bot's 🆕 confirmation, are tied to that task, so "done ✅" as a reply works.
-- **Auto-offline:** anyone silent for `AUTO_OFFLINE_MINUTES` is marked offline.
+- **Absent:** anyone not online `ABSENT_AFTER_MINUTES` (default 120) after their team's shift starts is absent that day. Their Team Lead and the Managers get a private message, and reports show it.
+- **Managers get every EOD:** at each team's EOD time (and the EOW on Fridays), every Manager with Telegram linked gets a private message with the team summary, the team PDF and each person's own EOD PDF. Team Leads and Managers can ask for them any time with `/teameod` (or `/teameod week`).
+- **One row per subject:** tickets with the same title, such as a designer's and a developer's "Login page", are one row in team reports, showing each person's progress.
+- **Forgot to go offline:** nobody is marked offline for being quiet. Anyone still online the next day is signed off, and their day ends at the shift end.
 
 ## Setup
 
@@ -93,7 +96,7 @@ cp .env.example .env.local   # then fill in the values
 | `TELEGRAM_BOT_USERNAME` | Without `@`; shown as a link on the Profile page |
 | `GROQ_API_KEY` / `GROQ_MODEL` | Default model: `openai/gpt-oss-120b`. See which models your key can use at <https://console.groq.com/docs/models> |
 | `AI_MIN_CONFIDENCE` | Default `0.6` |
-| `AUTO_OFFLINE_MINUTES` | Default `240`; `0` disables it |
+| `ABSENT_AFTER_MINUTES` | Default `120`; `0` disables the absence check |
 | `APP_TIMEZONE` | Lets the AI resolve "tomorrow" or "Friday", and sets where a day starts and ends for reports, e.g. `Asia/Kolkata` |
 | `REPORT_EOD_TIME` · `REPORT_WORK_DAYS` · `REPORT_EOW_DAY` | When the bot posts EOD and EOW into each team's group. Defaults: 19:00, Mon–Fri, Friday. Each post comes with the full report as a downloadable .csv. `REPORT_EOD_REMINDER_MINUTES` (default 30, 0 = off) reminds people who haven't done their EOD that long before it goes out. Managers can switch posting off per team on the Team page. |
 

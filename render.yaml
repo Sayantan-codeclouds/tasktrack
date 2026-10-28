@@ -46,8 +46,8 @@ services:
         value: openai/gpt-oss-120b
       - key: AI_MIN_CONFIDENCE
         value: "0.6"
-      - key: AUTO_OFFLINE_MINUTES
-        value: "240"
+      - key: ABSENT_AFTER_MINUTES
+        value: "120"
       - key: REPORT_EOD_TIME
         value: "19:00"
       - key: REPORT_WORK_DAYS
