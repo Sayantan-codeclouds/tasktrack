@@ -58,8 +58,8 @@ interface Actor {
 
 export const rankOf = (p?: Position | null) => (p ? POSITION_RANK[p] : 0);
 
-/** Roles people can give themselves at sign-up; anything higher needs approval. */
-export const isSelfServeRole = (p: Position) => POSITION_RANK[p] <= POSITION_RANK.team_lead;
+/** Roles people can give themselves at sign-up — all of them: there's no approval step. */
+export const isSelfServeRole = (p: Position) => POSITIONS.includes(p);
 
 /** Managers and above (and admin) see and act on every team's tickets. */
 export const isManagerOrAbove = (u: Actor) => u.role === "admin" || rankOf(u.position) >= POSITION_RANK.manager;
