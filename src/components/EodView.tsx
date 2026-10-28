@@ -143,6 +143,7 @@ export default function EodView() {
     if (!readOnly && dirty && !(await save())) return;
     setBusy("pdf");
     window.location.href = `/api/eod/pdf?period=${period}&date=${date}${viewUser ? `&user=${viewUser}` : ""}`;
+    if (!readOnly) setPage((p) => (p ? { ...p, downloadedAt: new Date().toISOString() } : p));
     setTimeout(() => setBusy(null), 1500);
   }
 
@@ -252,6 +253,26 @@ export default function EodView() {
           ) : (
             <StatusLine page={page} dirty={dirty} kind={kind} />
           )}
+          <p
+            className={`flex flex-wrap items-center gap-x-2 rounded-xl border px-4 py-2.5 text-sm ${
+              page.downloadedAt ? "border-line bg-surface" : "border-break/40 bg-break/10"
+            }`}
+          >
+            <span aria-hidden>📤</span>
+            {page.downloadedAt ? (
+              <span>
+                PDF downloaded {readOnly ? "by them " : ""}
+                <strong>{timeAgo(page.downloadedAt)}</strong>
+                {readOnly ? "." : " — upload it to the HR portal if you haven't yet."}
+              </span>
+            ) : readOnly ? (
+              <span>They haven&apos;t downloaded this {kind} PDF yet.</span>
+            ) : (
+              <span>
+                <strong>Not downloaded yet.</strong> Download the PDF and upload it to the HR portal.
+              </span>
+            )}
+          </p>
 
           {/* Attendance */}
           <section className="card p-4">

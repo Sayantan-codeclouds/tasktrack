@@ -132,6 +132,16 @@ export function presenceChangeAt(c: { createdAt: Date; meta?: unknown }) {
   return Number.isNaN(seen) ? logged : Math.min(seen, logged);
 }
 
+/** Online, or did something, on `day`. Anyone who wasn't (leave, holiday) is left alone. */
+export function wasAround(m: MemberRow, day: string) {
+  const d = m.days[day];
+  return !!d && (d.onlineMinutes > 0 || !!d.firstOnline || d.events.some((e) => e.kind !== "presence"));
+}
+
+/** Team members (not managers) who were around on `day` — the people expected to send an EOD. */
+export const owesEod = (m: MemberRow, day: string) =>
+  m.inTeam && !(m.position && POSITION_GROUP[m.position] === "management") && wasAround(m, day);
+
 export async function buildTeamReport(
   teamId: string,
   period: Period,
@@ -436,10 +446,8 @@ export async function buildTeamReport(
     .filter((p) => p.inTeam || p.events || p.eodNotes.length)
     .sort((a, b) => Number(b.inTeam) - Number(a.inTeam) || b.events - a.events || a.name.localeCompare(b.name));
 
-  const missing =
-    period === "day"
-      ? members.filter((m) => m.inTeam && !m.eodNotes.length && !(m.position && POSITION_GROUP[m.position] === "management"))
-      : [];
+  // Only people who were around that day — anyone never online (leave, holiday) isn't chased for an EOD.
+  const missing = period === "day" ? members.filter((m) => owesEod(m, from) && !m.eodNotes.length) : [];
   const missingEod = missing.map((m) => m.name);
 
   return {
@@ -478,7 +486,7 @@ export async function buildTeamReport(
 // ---------- CSV download ----------
 
 /** e.g. "mobile-team-eod-2026-10-27.csv" */
-export function reportFileName(r: TeamReport, ext: "csv" | "txt") {
+export function reportFileName(r: TeamReport, ext: "csv" | "txt" | "pdf") {
   const slug = r.team.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "team";
   return `${slug}-${r.period === "day" ? "eod" : "eow"}-${r.from}.${ext}`;
 }

@@ -1,7 +1,8 @@
 import { InputFile, type Api } from "grammy";
 import { Team } from "../src/lib/models/Team";
 import { User } from "../src/lib/models/User";
-import { buildTeamReport, formatReportCsv, formatReportText, reportFileName, reportWorkDays } from "../src/lib/reports";
+import { buildTeamReport, formatReportCsv, formatReportText, owesEod, reportFileName, reportWorkDays } from "../src/lib/reports";
+import { ReportDownload } from "../src/lib/models/ReportDownload";
 import { appTimeZone, localParts, weekStart } from "../src/lib/time";
 import { isHhmm } from "../src/lib/constants";
 import { adminUserIds } from "../src/lib/admin";
@@ -68,8 +69,9 @@ function minus(hhmm: string, minutes: number) {
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /**
- * Called every minute. In the EOD_REMINDER_MINUTES before a team's EOD goes out, nudges the people
- * who haven't done theirs yet (no EOD saved on the site, no /eod note) — once a day, and only if someone's missing.
+ * Called every minute. In the EOD_REMINDER_MINUTES before a team's EOD goes out, pings the people who were
+ * online today but haven't downloaded today's EOD PDF (and, on EOW_DAY, the week's EOW) to upload to the HR
+ * portal. Anyone not online today is skipped. Once a day per team, and only if someone's still to do it.
  */
 export async function remindMissingEods(api: Api, now = new Date()) {
   const tz = appTimeZone();
@@ -88,16 +90,42 @@ export async function remindMissingEods(api: Api, now = new Date()) {
     if (!claimed.modifiedCount) continue;
     try {
       const report = await buildTeamReport(String(t._id), "day", ymd, { hideUserIds: await adminUserIds() });
-      if (!report?.missingEodIds.length) continue;
-      const people = await User.find({ _id: { $in: report.missingEodIds } }).select("name telegramId").sort({ name: 1 }).lean();
+      if (!report) continue;
+      const due = report.members.filter((m) => owesEod(m, ymd)).map((m) => m._id);
+      const isEowDay = weekday === EOW_DAY;
+      const downloads = await ReportDownload.find({
+        user: { $in: due },
+        $or: [{ period: "day" as const, key: ymd }, ...(isEowDay ? [{ period: "week" as const, key: weekStart(ymd) }] : [])],
+      })
+        .select("user period")
+        .lean();
+      const has = (period: "day" | "week") => new Set(downloads.filter((d) => d.period === period).map((d) => String(d.user)));
+      const eodLeft = due.filter((id) => !has("day").has(id));
+      const eowLeft = isEowDay ? due.filter((id) => !has("week").has(id)) : [];
+      if (!eodLeft.length && !eowLeft.length) continue;
+
+      const people = new Map(
+        (await User.find({ _id: { $in: [...new Set([...eodLeft, ...eowLeft])] } }).select("name telegramId").lean()).map((p) => [String(p._id), p]),
+      );
       // A mention by Telegram id pings people even without a @username.
-      const names = people.map((p) => (p.telegramId ? `<a href="tg://user?id=${p.telegramId}">${escapeHtml(p.name)}</a>` : escapeHtml(p.name)));
+      const mention = (id: string) => {
+        const p = people.get(id);
+        if (!p) return "";
+        return p.telegramId ? `<a href="tg://user?id=${p.telegramId}">${escapeHtml(p.name)}</a>` : escapeHtml(p.name);
+      };
+      const list = (ids: string[]) => ids.map(mention).filter(Boolean).join(", ");
       const site = process.env.APP_URL?.replace(/\/$/, "");
       await api.sendMessage(
         t.telegramChatId!,
-        `⏰ <b>EOD reminder</b> — the team EOD goes out at ${eodAt}.\n` +
-          `Still to do: ${names.join(", ")}\n\n` +
-          (site ? `Fill yours in at ${escapeHtml(site)}/eod — or send /eod what you did today.` : "Send /eod what you did today."),
+        [
+          `⏰ <b>EOD reminder</b> — ${EOD_REMINDER_MINUTES} min to go (team EOD at ${eodAt}).`,
+          `Download your ${isEowDay ? "EOD and EOW" : "EOD"} PDF and upload it to the HR portal.`,
+          "",
+          ...(eodLeft.length ? [`📄 EOD not downloaded yet: ${list(eodLeft)}`] : []),
+          ...(eowLeft.length ? [`📄 EOW not downloaded yet: ${list(eowLeft)}`] : []),
+          "",
+          `${site ? `Get it at ${escapeHtml(site)}/eod — or s` : "S"}end /myeod${isEowDay ? " (and /myeod week)" : ""} and I'll send it to you privately.`,
+        ].join("\n"),
         { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
       );
       reminded.push(t.name);

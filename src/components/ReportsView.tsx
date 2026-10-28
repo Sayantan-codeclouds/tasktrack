@@ -169,6 +169,7 @@ export default function ReportsView() {
               <div role="menu" className="card absolute right-0 z-30 mt-2 w-60 overflow-hidden p-1 shadow-xl" onMouseLeave={() => setDownloadOpen(false)}>
                 {(
                   [
+                    ["pdf", "PDF", "Tickets, people and EOD notes — ready to share"],
                     ["csv", "Spreadsheet (.csv)", "Tickets day by day, people, and each person's day"],
                     ["txt", "Text (.txt)", "Same as the Telegram message"],
                   ] as const
@@ -185,18 +186,6 @@ export default function ReportsView() {
                     <span className="block text-[11px] text-muted">{sub}</span>
                   </a>
                 ))}
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    setDownloadOpen(false);
-                    // Print every tab, then let the browser save it as PDF.
-                    setTimeout(() => window.print(), 50);
-                  }}
-                  className="block w-full rounded-lg px-3 py-2 text-left hover:bg-surface-2"
-                >
-                  <span className="block text-sm font-medium">PDF</span>
-                  <span className="block text-[11px] text-muted">Opens print — choose “Save as PDF”</span>
-                </button>
               </div>
             )}
           </div>
@@ -301,7 +290,7 @@ export default function ReportsView() {
             </p>
           )}
 
-          {/* Tabs — every tab is printed for the PDF download */}
+          {/* Tabs */}
           <div className="no-print flex w-fit rounded-xl bg-surface-2 p-1" role="tablist" aria-label="Report sections">
             {(
               [

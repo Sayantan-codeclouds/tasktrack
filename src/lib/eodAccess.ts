@@ -1,13 +1,12 @@
 import "server-only";
 import { isValidObjectId, Types } from "mongoose";
-import { POSITION_RANK, isManagerOrAbove, rankOf } from "./constants";
+import { POSITIONS, POSITION_RANK, isManagerOrAbove, rankOf } from "./constants";
 import { User, type IUser } from "./models/User";
-import { Team } from "./models/Team";
 import { hiddenIdsFor } from "./admin";
 
 /**
  * Whose EOD / EOW a viewer may open (read-only unless it's their own):
- * themselves; Managers and the admin — anyone; Team Leads — the people in their teams.
+ * themselves; Managers and the admin — anyone; Team Leads — every employee below Manager.
  */
 export async function eodPeopleFor(viewer: IUser) {
   const me = { _id: String(viewer._id), role: viewer.role, position: viewer.position ?? null };
@@ -16,10 +15,11 @@ export async function eodPeopleFor(viewer: IUser) {
   if (isManagerOrAbove(me)) {
     filter = { _id: { $nin: hidden.map((id) => new Types.ObjectId(id)) } };
   } else if (rankOf(me.position) >= POSITION_RANK.team_lead) {
-    const teams = await Team.find({ $or: [{ "members.user": viewer._id }, { lead: viewer._id }] }).select("members.user lead").lean();
-    const ids = new Set(teams.flatMap((t) => [...t.members.map((m) => String(m.user)), ...(t.lead ? [String(t.lead)] : [])]));
-    for (const id of hidden) ids.delete(id);
-    filter = { _id: { $in: [...ids].map((id) => new Types.ObjectId(id)) } };
+    // Every employee, in any team — but not Managers and above.
+    filter = {
+      _id: { $nin: hidden.map((id) => new Types.ObjectId(id)) },
+      position: { $nin: POSITIONS.filter((p) => POSITION_RANK[p] > POSITION_RANK.team_lead) },
+    };
   }
   const others = filter
     ? await User.find({ ...filter, _id: { ...(filter._id as object), $ne: viewer._id } }).select("name position").sort({ name: 1 }).lean()

@@ -8,7 +8,7 @@ import { Team, type ITeam } from "../src/lib/models/Team";
 import { POSITION_LABEL, TASK_STATUS_LABEL, ticketKey, type Presence, type Priority } from "../src/lib/constants";
 import { addEodNote, createTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
 import { buildTeamReport, formatReportText } from "../src/lib/reports";
-import { buildEodPage, eodFileName } from "../src/lib/eod";
+import { buildEodPage, eodFileName, markEodDownloaded } from "../src/lib/eod";
 import { renderEodPdf } from "../src/lib/eodPdf";
 import { adminUserIds } from "../src/lib/admin";
 import { appTimeZone, dayKey } from "../src/lib/time";
@@ -415,6 +415,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       });
       return;
     }
+    await markEodDownloaded(String(user._id), page.period, page.from, "telegram");
     if (ctx.chat?.type !== "private") await react(ctx, "👍");
   });
 

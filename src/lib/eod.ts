@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { connectDB } from "./db";
 import { ReportDoc, type IEodContent, type IEodTaskRow } from "./models/ReportDoc";
+import { ReportDownload } from "./models/ReportDownload";
 import { TASK_STATUS_LABEL } from "./constants";
 import { buildPersonReport, type PersonDay, type PersonReport } from "./personReport";
 import { formatDay, weekStart } from "./time";
@@ -33,6 +34,8 @@ export interface EodPage {
   /** Saved by the person (otherwise this is the automatic draft). */
   saved: boolean;
   updatedAt: string | null;
+  /** When they last downloaded their own PDF of it (to send to HR). */
+  downloadedAt: string | null;
   content: EodContent;
   /** The automatic draft, so the page can offer "reset" per field without another request. */
   draft: EodContent;
@@ -145,7 +148,7 @@ export async function buildEodPage(userId: string, period: Period, date: string)
           days.filter((d) => d.saved || d.person.tickets.length || d.person.eodNotes.length),
           r,
         );
-  const saved = await ReportDoc.findOne({ user, period, key }).lean();
+  const [saved, download] = await Promise.all([ReportDoc.findOne({ user, period, key }).lean(), ReportDownload.findOne({ user, period, key }).lean()]);
 
   return {
     period,
@@ -157,6 +160,7 @@ export async function buildEodPage(userId: string, period: Period, date: string)
     shift: r.shift,
     saved: Boolean(saved),
     updatedAt: saved ? saved.updatedAt.toISOString() : null,
+    downloadedAt: download ? download.at.toISOString() : null,
     content: saved ? contentOf(saved) : draft,
     draft,
     attendance: days.map(({ day, person, content }) => ({
@@ -179,6 +183,12 @@ export async function saveEod(userId: string, period: Period, key: string, conte
     { $set: content },
     { upsert: true },
   );
+}
+
+/** Remember that someone downloaded their own EOD / EOW PDF. */
+export async function markEodDownloaded(userId: string, period: Period, key: string, via: "web" | "telegram") {
+  await connectDB();
+  await ReportDownload.updateOne({ user: new Types.ObjectId(userId), period, key }, { $set: { at: new Date(), via } }, { upsert: true });
 }
 
 export async function resetEod(userId: string, period: Period, key: string) {

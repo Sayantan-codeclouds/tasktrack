@@ -1,5 +1,5 @@
 import { jsonError, withUser } from "@/lib/api";
-import { buildEodPage, eodFileName } from "@/lib/eod";
+import { buildEodPage, eodFileName, markEodDownloaded } from "@/lib/eod";
 import { renderEodPdf } from "@/lib/eodPdf";
 import { eodTargetFor } from "@/lib/eodAccess";
 import { appTimeZone, dayKey, isYmd } from "@/lib/time";
@@ -16,6 +16,8 @@ export const GET = withUser(async (req, { user }) => {
   const page = await buildEodPage(target, period, isYmd(date) ? date : dayKey(new Date(), appTimeZone()));
   if (!page) return jsonError("Not found", 404);
   const pdf = await renderEodPdf(page);
+  // Only your own download counts as "sent to HR" (a Team Lead opening yours doesn't).
+  if (target === String(user._id)) await markEodDownloaded(target, page.period, page.from, "web");
   return new Response(new Uint8Array(pdf), {
     headers: {
       "Content-Type": "application/pdf",
