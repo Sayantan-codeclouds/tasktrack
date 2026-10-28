@@ -64,7 +64,7 @@ function dayDraft(d: PersonDay, r: PersonReport): EodContent {
     title: t.title,
     status: TASK_STATUS_LABEL[t.status],
     progress: progressText(t.from, t.to),
-    remarks: [t.created && "New", t.completed && "Completed"].filter(Boolean).join(", "),
+    remarks: [t.completed || t.status === "done" ? "Completed" : TASK_STATUS_LABEL[t.status], t.created && "New"].filter(Boolean).join(", "),
   }));
   const notes = d.eodNotes.map((n) => n.text).join("\n\n");
   const auto = [
@@ -176,7 +176,13 @@ async function overseerDraft(userId: string, period: Period, date: string): Prom
         title: prefix + x.title,
         status: x.completed ? "Done" : TASK_STATUS_LABEL[x.status],
         progress: progressText(x.start, x.end),
-        remarks: x.parts ? partsText(x) : [x.completed ? `Done by ${names(x)}` : names(x), x.isNew && "new"].filter(Boolean).join(" · "),
+        remarks: [
+          x.completed ? `Done by ${names(x)}` : `${TASK_STATUS_LABEL[x.status]} — ${names(x) || "Unassigned"}`,
+          x.parts && partsText(x),
+          x.isNew && "new",
+        ]
+          .filter(Boolean)
+          .join(" · "),
       });
     }
     // Everything else still open on the board.
@@ -190,7 +196,7 @@ async function overseerDraft(userId: string, period: Period, date: string): Prom
       const key = ticketKey(o.number);
       if (shown.has(key)) continue;
       const who = [o.assignee, ...(o.collaborators ?? [])].filter((p) => p && !hide.includes(String(p._id))).map((p) => p!.name);
-      tasks.push({ ticket: key, title: prefix + o.title, status: TASK_STATUS_LABEL[o.status], progress: `${o.progress}%`, remarks: who.join(", ") || "Unassigned" });
+      tasks.push({ ticket: key, title: prefix + o.title, status: TASK_STATUS_LABEL[o.status], progress: `${o.progress}%`, remarks: `${TASK_STATUS_LABEL[o.status]} — ${who.join(", ") || "Unassigned"}` });
     }
 
     const done = r.tickets.filter((x) => x.completed);
