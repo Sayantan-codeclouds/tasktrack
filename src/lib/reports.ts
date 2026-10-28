@@ -655,7 +655,7 @@ export function formatReportCsv(r: TeamReport): string {
   }
 
   rows.push([], ["PEOPLE — DAY BY DAY"]);
-  rows.push(["Name", "Day", "Login", "Logout", "Absent", "Late by (min)", "Online (min)", "Break (min)", "Last active", "What happened"]);
+  rows.push(["Name", "Day", "Absent", "Late by (min)", "Online (min)", "Break (min)", "What happened"]);
   for (const m of r.members) {
     for (const d of r.days) {
       const day = m.days[d];
@@ -663,14 +663,13 @@ export function formatReportCsv(r: TeamReport): string {
       rows.push([
         m.name,
         d,
-        time(day.firstOnline),
-        time(day.lastOffline),
         day.absent ? "yes" : "",
         day.lateBy ?? "",
         day.onlineMinutes,
         day.breakMinutes,
-        time(day.lastActive),
-        day.events.map((e) => `${time(e.at)} ${e.ticket ? `${e.ticket.key} ${e.ticket.title}: ` : ""}${e.text}`).join(" | "),
+        day.events
+          .filter((e) => e.kind !== "presence")
+          .map((e) => `${time(e.at)} ${e.ticket ? `${e.ticket.key} ${e.ticket.title}: ` : ""}${e.text}`).join(" | "),
       ]);
     }
   }
@@ -693,7 +692,8 @@ function list<T>(items: T[], line: (x: T) => string) {
   return shown.join("\n");
 }
 
-export function formatReportText(r: TeamReport): string {
+/** `loginTimes: false` for downloads — login / logout times only go in the Telegram message. */
+export function formatReportText(r: TeamReport, opts: { loginTimes?: boolean } = {}): string {
   const title =
     r.period === "day"
       ? `📋 EOD · ${r.team.name} · ${formatDay(r.from, { weekday: "short", day: "numeric", month: "short" })}`
@@ -724,7 +724,7 @@ export function formatReportText(r: TeamReport): string {
         const day = r.period === "day" ? m.days[r.from] : undefined;
         const bits = [
           day?.absent && !day.firstOnline && "🚫 absent",
-          day?.firstOnline && `login ${clock(day.firstOnline)}${day.lastOffline ? ` · logout ${clock(day.lastOffline)}` : ""}`,
+          opts.loginTimes !== false && day?.firstOnline && `login ${clock(day.firstOnline)}${day.lastOffline ? ` · logout ${clock(day.lastOffline)}` : ""}`,
           r.period === "week" && m.absentDays.length && `🚫 absent ${m.absentDays.length} day${m.absentDays.length === 1 ? "" : "s"}`,
           m.completed.length && `${m.completed.length} done`,
           m.events && `${m.events} ticket action${m.events === 1 ? "" : "s"}`,

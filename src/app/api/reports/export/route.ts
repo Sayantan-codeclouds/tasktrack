@@ -16,7 +16,7 @@ export const GET = withUser(async (req, { user }) => {
 
   const format = q.get("format") === "txt" ? "txt" : q.get("format") === "pdf" ? "pdf" : "csv";
   const name = reportFileName(report, format);
-  const body = format === "pdf" ? new Uint8Array(await renderTeamReportPdf(report)) : format === "csv" ? formatReportCsv(report) : formatReportText(report);
+  const body = format === "pdf" ? new Uint8Array(await renderTeamReportPdf(report)) : format === "csv" ? formatReportCsv(report) : formatReportText(report, { loginTimes: false });
   return new Response(body, {
     headers: {
       "Content-Type": format === "pdf" ? "application/pdf" : format === "csv" ? "text/csv; charset=utf-8" : "text/plain; charset=utf-8",

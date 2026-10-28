@@ -276,18 +276,18 @@ export async function resetEod(userId: string, period: Period, key: string) {
 
 /**
  * EODs as one CSV: a row per task worked on, then everyone's current open tickets.
- * `attendance` adds login / logout / online time (for Team Leads and Managers — not the HR copy).
+ * `attendance` adds online time (for Team Leads and Managers — not the HR copy). Login / logout times never go in a download.
  */
 export function eodCsv(pages: EodPage[], opts: { attendance: boolean }) {
   const att = (p: EodPage) => {
     const a = p.period === "day" ? p.attendance[0] : null;
-    return a ? [a.login, a.logout, dur(a.onlineMinutes)] : ["", "", dur(p.totals.onlineMinutes)];
+    return [dur(a ? a.onlineMinutes : p.totals.onlineMinutes)];
   };
   const kind = pages[0]?.period === "week" ? "EOW" : "EOD";
   const rows: unknown[][] = [];
   rows.push([kind, pages[0] ? (pages[0].period === "day" ? pages[0].from : `${pages[0].from} to ${pages[0].to}`) : ""]);
   rows.push([]);
-  rows.push(["Name", "Role", "Team", ...(opts.attendance ? ["Login", "Logout", "Online"] : []), "Ticket", "Task", "Status", "Progress", "Remarks", "Summary", "Blockers", "Plan"]);
+  rows.push(["Name", "Role", "Team", ...(opts.attendance ? ["Online"] : []), "Ticket", "Task", "Status", "Progress", "Remarks", "Summary", "Blockers", "Plan"]);
   for (const p of pages) {
     const who = [p.person.name, p.person.role ?? "", p.person.teams.join(", "), ...(opts.attendance ? att(p) : [])];
     const tasks = p.content.tasks.length ? p.content.tasks : [null];

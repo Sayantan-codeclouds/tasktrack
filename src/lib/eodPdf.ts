@@ -47,8 +47,8 @@ export function renderEodPdf(p: EodPage): Promise<Buffer> {
 }
 
 /**
- * Everyone's EOD / EOW in one PDF, for a Team Lead or Manager: per person, when they logged in and out,
- * what they worked on, and their current open tickets.
+ * Everyone's EOD / EOW in one PDF, for a Team Lead or Manager: per person, online time, what they worked on,
+ * and their current open tickets. No login / logout times.
  */
 export function renderEveryoneEodPdf(pages: EodPage[], period: "day" | "week", from: string, to: string, timeZone: string): Promise<Buffer> {
   const title = period === "day" ? "Everyone's EOD" : "Everyone's EOW";
@@ -62,7 +62,7 @@ export function renderEveryoneEodPdf(pages: EodPage[], period: "day" | "week", f
     pdf.paragraph(
       a
         ? a.login
-          ? `Login ${a.login} · Logout ${a.logout || "—"} · Online ${dur(a.onlineMinutes)}${a.lateBy ? ` · Late ${dur(a.lateBy)}` : ""}`
+          ? `Online ${dur(a.onlineMinutes)}${a.lateBy ? ` · Late ${dur(a.lateBy)}` : ""}`
           : "Not online this day."
         : `Active ${p.totals.activeDays}/${p.totals.workDays} days · Online ${dur(p.totals.onlineMinutes)} · Late ${p.totals.lateDays} day(s)`,
     );

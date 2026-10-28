@@ -2,9 +2,8 @@ import { POSITION_LABEL, TASK_STATUS_LABEL } from "./constants";
 import { startPdf } from "./pdf";
 import { rangeLabel } from "./eodPdf";
 import { partsText, type TeamReport } from "./reports";
-import { clockTime } from "./eod";
 
-/** A team's EOD / EOW as a PDF for Managers and Team Leads: the work, plus who logged in when and who was absent. */
+/** A team's EOD / EOW as a PDF for Managers and Team Leads: the work, plus who was late or absent (no login / logout times). */
 export function renderTeamReportPdf(r: TeamReport): Promise<Buffer> {
   const title = `${r.team.name} · Team ${r.period === "day" ? "EOD" : "EOW"} Report`;
   const pdf = startPdf({ title, subtitle: rangeLabel(r.period, r.from, r.to), author: r.team.name });
@@ -49,7 +48,6 @@ export function renderTeamReportPdf(r: TeamReport): Promise<Buffer> {
   }
 
   pdf.heading("People");
-  const time = (iso: string | null | undefined) => (iso ? clockTime(iso, r.timeZone) : "—");
   const attendance = (m: TeamReport["members"][number]) => {
     if (r.period === "week") return m.absentDays.length ? `Absent ${m.absentDays.length}d` : m.lateDays ? `Late ${m.lateDays}d` : "—";
     const d = m.days[r.from];
@@ -60,14 +58,12 @@ export function renderTeamReportPdf(r: TeamReport): Promise<Buffer> {
   pdf.table(
     r.period === "day"
       ? [
-          { label: "Name", w: 0.2 },
-          { label: "Role", w: 0.16 },
-          { label: "Login", w: 0.09 },
-          { label: "Logout", w: 0.09 },
-          { label: "Attendance", w: 0.15 },
-          { label: "Done", w: 0.07, align: "right" },
-          { label: "Moved", w: 0.08, align: "right" },
-          { label: "EOD", w: 0.16 },
+          { label: "Name", w: 0.24 },
+          { label: "Role", w: 0.2 },
+          { label: "Attendance", w: 0.18 },
+          { label: "Done", w: 0.1, align: "right" },
+          { label: "Moved", w: 0.1, align: "right" },
+          { label: "EOD", w: 0.18 },
         ]
       : [
           { label: "Name", w: 0.22 },
@@ -84,8 +80,6 @@ export function renderTeamReportPdf(r: TeamReport): Promise<Buffer> {
         ? [
             m.name,
             m.position ? POSITION_LABEL[m.position] : "—",
-            time(m.days[r.from]?.firstOnline),
-            time(m.days[r.from]?.lastOffline),
             attendance(m),
             String(m.completed.length),
             String(m.progressed.length),
