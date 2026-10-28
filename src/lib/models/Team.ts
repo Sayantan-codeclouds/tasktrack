@@ -40,6 +40,8 @@ export interface ITeam {
   /** Day (YYYY-MM-DD) / week start of the last automatic post — prevents double posting. */
   lastEodPostedFor?: string | null;
   lastEowPostedFor?: string | null;
+  /** Day the "EOD in 30 minutes" reminder went out. */
+  lastEodReminderFor?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,6 +81,7 @@ const TeamSchema = new Schema<ITeam>(
     reportsEnabled: { type: Boolean, default: true },
     lastEodPostedFor: { type: String, default: null },
     lastEowPostedFor: { type: String, default: null },
+    lastEodReminderFor: { type: String, default: null },
   },
   { timestamps: true },
 );

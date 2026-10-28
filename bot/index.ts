@@ -3,7 +3,7 @@ import { connectDB } from "../src/lib/db";
 import { autoOfflineIdleUsers } from "../src/lib/services";
 import { SystemStatus } from "../src/lib/models/SystemStatus";
 import { BOT_COMMANDS, createBot } from "./bot";
-import { postScheduledReports, REPORT_SCHEDULE } from "./scheduler";
+import { postScheduledReports, remindMissingEods, REPORT_SCHEDULE } from "./scheduler";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -40,6 +40,9 @@ async function main() {
     postScheduledReports(bot.api)
       .then((posted) => posted.length && console.log(`[reports] posted: ${posted.join(", ")}`))
       .catch((err) => console.error("[reports] scheduler failed:", err));
+    remindMissingEods(bot.api)
+      .then((teams) => teams.length && console.log(`[reports] EOD reminder sent: ${teams.join(", ")}`))
+      .catch((err) => console.error("[reports] EOD reminder failed:", err));
   }, 60_000);
   const s = REPORT_SCHEDULE;
   console.log(`[reports] EOD at ${s.EOD_TIME} on days ${s.WORK_DAYS.join(",")} · EOW on day ${s.EOW_DAY} (${process.env.APP_TIMEZONE || "UTC"})`);

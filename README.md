@@ -95,7 +95,7 @@ cp .env.example .env.local   # then fill in the values
 | `AI_MIN_CONFIDENCE` | Default `0.6` |
 | `AUTO_OFFLINE_MINUTES` | Default `240`; `0` disables it |
 | `APP_TIMEZONE` | Lets the AI resolve "tomorrow" or "Friday", and sets where a day starts and ends for reports, e.g. `Asia/Kolkata` |
-| `REPORT_EOD_TIME` · `REPORT_WORK_DAYS` · `REPORT_EOW_DAY` | When the bot posts EOD and EOW into each team's group. Defaults: 19:00, Mon–Fri, Friday. Each post comes with the full report as a downloadable .csv. Managers can switch posting off per team on the Team page. |
+| `REPORT_EOD_TIME` · `REPORT_WORK_DAYS` · `REPORT_EOW_DAY` | When the bot posts EOD and EOW into each team's group. Defaults: 19:00, Mon–Fri, Friday. Each post comes with the full report as a downloadable .csv. `REPORT_EOD_REMINDER_MINUTES` (default 30, 0 = off) reminds people who haven't done their EOD that long before it goes out. Managers can switch posting off per team on the Team page. |
 
 ### Optional: Google sign-in
 

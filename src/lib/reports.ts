@@ -107,6 +107,8 @@ export interface TeamReport {
   tickets: TicketRow[];
   /** Day reports: team members (not managers) who haven't posted an EOD note. */
   missingEod: string[];
+  /** Same people, by id. */
+  missingEodIds: string[];
 }
 
 const TICKET_TYPES = new Set(["task_created", "task_progress", "task_status", "task_completed"]);
@@ -434,12 +436,11 @@ export async function buildTeamReport(
     .filter((p) => p.inTeam || p.events || p.eodNotes.length)
     .sort((a, b) => Number(b.inTeam) - Number(a.inTeam) || b.events - a.events || a.name.localeCompare(b.name));
 
-  const missingEod =
+  const missing =
     period === "day"
-      ? members
-          .filter((m) => m.inTeam && !m.eodNotes.length && !(m.position && POSITION_GROUP[m.position] === "management"))
-          .map((m) => m.name)
+      ? members.filter((m) => m.inTeam && !m.eodNotes.length && !(m.position && POSITION_GROUP[m.position] === "management"))
       : [];
+  const missingEod = missing.map((m) => m.name);
 
   return {
     team: {
@@ -470,6 +471,7 @@ export async function buildTeamReport(
     members,
     tickets,
     missingEod,
+    missingEodIds: missing.map((m) => m._id),
   };
 }
 

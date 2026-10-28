@@ -1,5 +1,6 @@
 import { InputFile, type Api } from "grammy";
 import { Team } from "../src/lib/models/Team";
+import { User } from "../src/lib/models/User";
 import { buildTeamReport, formatReportCsv, formatReportText, reportFileName, reportWorkDays } from "../src/lib/reports";
 import { appTimeZone, localParts, weekStart } from "../src/lib/time";
 import { isHhmm } from "../src/lib/constants";
@@ -10,6 +11,8 @@ const EOD_TIME = /^\d{2}:\d{2}$/.test(process.env.REPORT_EOD_TIME ?? "") ? proce
 /** 0 = Sunday … 6 = Saturday. Default Friday. */
 const EOW_DAY = Number(process.env.REPORT_EOW_DAY ?? 5);
 const WORK_DAYS = reportWorkDays();
+/** How long before the EOD to remind people who haven't done theirs. 0 turns it off. */
+const EOD_REMINDER_MINUTES = Number(process.env.REPORT_EOD_REMINDER_MINUTES ?? 30);
 
 /**
  * Called every minute. Once it's past EOD_TIME on a workday, posts each connected team's EOD
@@ -55,4 +58,55 @@ export async function postScheduledReports(api: Api, now = new Date()) {
   return posted;
 }
 
-export const REPORT_SCHEDULE = { EOD_TIME, EOW_DAY, WORK_DAYS };
+/** "20:06" − 30 → "19:36" (not before midnight). */
+function minus(hhmm: string, minutes: number) {
+  const [h, m] = hhmm.split(":").map(Number);
+  const t = Math.max(0, h * 60 + m - minutes);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Called every minute. In the EOD_REMINDER_MINUTES before a team's EOD goes out, nudges the people
+ * who haven't done theirs yet (no EOD saved on the site, no /eod note) — once a day, and only if someone's missing.
+ */
+export async function remindMissingEods(api: Api, now = new Date()) {
+  const tz = appTimeZone();
+  const { ymd, hhmm, weekday } = localParts(now, tz);
+  if (!WORK_DAYS.includes(weekday) || EOD_REMINDER_MINUTES <= 0) return [];
+  const reminded: string[] = [];
+
+  const teams = await Team.find({ telegramChatId: { $ne: null }, reportsEnabled: { $ne: false } })
+    .select("_id name telegramChatId shiftEnd")
+    .lean();
+  for (const t of teams) {
+    const eodAt = isHhmm(t.shiftEnd) ? t.shiftEnd : EOD_TIME;
+    // Only between the reminder time and the EOD itself — a late wake-up skips straight to the EOD.
+    if (hhmm < minus(eodAt, EOD_REMINDER_MINUTES) || hhmm >= eodAt) continue;
+    const claimed = await Team.updateOne({ _id: t._id, lastEodReminderFor: { $ne: ymd } }, { $set: { lastEodReminderFor: ymd } });
+    if (!claimed.modifiedCount) continue;
+    try {
+      const report = await buildTeamReport(String(t._id), "day", ymd, { hideUserIds: await adminUserIds() });
+      if (!report?.missingEodIds.length) continue;
+      const people = await User.find({ _id: { $in: report.missingEodIds } }).select("name telegramId").sort({ name: 1 }).lean();
+      // A mention by Telegram id pings people even without a @username.
+      const names = people.map((p) => (p.telegramId ? `<a href="tg://user?id=${p.telegramId}">${escapeHtml(p.name)}</a>` : escapeHtml(p.name)));
+      const site = process.env.APP_URL?.replace(/\/$/, "");
+      await api.sendMessage(
+        t.telegramChatId!,
+        `⏰ <b>EOD reminder</b> — the team EOD goes out at ${eodAt}.\n` +
+          `Still to do: ${names.join(", ")}\n\n` +
+          (site ? `Fill yours in at ${escapeHtml(site)}/eod — or send /eod what you did today.` : "Send /eod what you did today."),
+        { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
+      );
+      reminded.push(t.name);
+    } catch (err) {
+      console.error(`[reports] failed to send the EOD reminder for ${t.name}:`, err);
+      await Team.updateOne({ _id: t._id, lastEodReminderFor: ymd }, { $set: { lastEodReminderFor: null } });
+    }
+  }
+  return reminded;
+}
+
+export const REPORT_SCHEDULE = { EOD_TIME, EOW_DAY, WORK_DAYS, EOD_REMINDER_MINUTES };

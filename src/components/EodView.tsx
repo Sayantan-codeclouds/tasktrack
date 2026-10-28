@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, readPref, timeAgo, writePref } from "@/lib/client";
+import { POSITION_LABEL, type Position } from "@/lib/constants";
 import type { EodContent, EodPage, EodTaskRow } from "@/lib/eod";
 import { Spinner } from "./ui";
 
 type Period = "day" | "week";
+type Person = { _id: string; name: string; position: Position | null; me: boolean };
 
 const PERIOD_PREF = "tt.eod.period";
 
@@ -40,6 +42,10 @@ export default function EodView() {
   const [busy, setBusy] = useState<"load" | "save" | "reset" | "pdf" | null>("load");
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  /** Whose report is open ("" = mine). Team Leads and Managers can open their people's, read-only. */
+  const [viewUser, setViewUser] = useState("");
+  const [people, setPeople] = useState<Person[]>([]);
+  const [readOnly, setReadOnly] = useState(false);
   const inBrowser = useInBrowser();
 
   useEffect(() => {
@@ -56,14 +62,19 @@ export default function EodView() {
     let cancelled = false;
     setBusy("load");
     setError(null);
-    api<{ page: EodPage }>(`/api/eod?period=${period}&date=${date}`)
-      .then((r) => !cancelled && show(r.page))
+    api<{ page: EodPage; people: Person[]; readOnly: boolean }>(`/api/eod?period=${period}&date=${date}${viewUser ? `&user=${viewUser}` : ""}`)
+      .then((r) => {
+        if (cancelled) return;
+        show(r.page);
+        setPeople(r.people);
+        setReadOnly(r.readOnly);
+      })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setBusy(null));
     return () => {
       cancelled = true;
     };
-  }, [period, date, show]);
+  }, [period, date, viewUser, show]);
 
   // Don't lose edits by closing the tab.
   useEffect(() => {
@@ -80,8 +91,9 @@ export default function EodView() {
   }, [toast]);
 
   const leave = () => !dirty || confirm("You have unsaved changes. Leave without saving?");
-  const go = (next: { period?: Period; date?: string }) => {
+  const go = (next: { period?: Period; date?: string; user?: string }) => {
     if (!leave()) return;
+    if (next.user !== undefined) setViewUser(next.user);
     if (next.period) {
       setPeriod(next.period);
       writePref(PERIOD_PREF, next.period);
@@ -128,9 +140,9 @@ export default function EodView() {
 
   async function downloadPdf() {
     // The PDF is made from what's saved, so save first.
-    if (dirty && !(await save())) return;
+    if (!readOnly && dirty && !(await save())) return;
     setBusy("pdf");
-    window.location.href = `/api/eod/pdf?period=${period}&date=${date}`;
+    window.location.href = `/api/eod/pdf?period=${period}&date=${date}${viewUser ? `&user=${viewUser}` : ""}`;
     setTimeout(() => setBusy(null), 1500);
   }
 
@@ -152,6 +164,7 @@ export default function EodView() {
         ? `${fmt(page.from, { day: "numeric", month: "short" })} – ${fmt(page.to, { day: "numeric", month: "short", year: "numeric" })}`
         : "";
   const kind = period === "day" ? "EOD" : "EOW";
+  const viewing = people.find((p) => (viewUser ? p._id === viewUser : p.me));
 
   return (
     <div className="space-y-6 pb-24">
@@ -159,12 +172,31 @@ export default function EodView() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">EOD / EOW</h1>
-          <p className="mt-0.5 text-sm text-muted">Your end-of-day and end-of-week report. Filled in automatically — edit it, save, and download the PDF for HR.</p>
+          <p className="mt-0.5 text-sm text-muted">
+            {readOnly
+              ? `${viewing?.name ?? "This person"}'s end-of-day and end-of-week report — read-only.`
+              : "Your end-of-day and end-of-week report. Filled in automatically — edit it, save, and download the PDF for HR."}
+          </p>
         </div>
-        <button className="btn-primary" onClick={downloadPdf} disabled={!content || busy !== null}>
-          {busy === "pdf" ? <Spinner /> : <DownloadIcon />}
-          Download PDF
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {people.length > 1 && (
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted">Viewing</span>
+              <select className="input w-auto py-1.5" value={viewUser} onChange={(e) => go({ user: e.target.value })} aria-label="Whose report">
+                {people.map((p) => (
+                  <option key={p._id} value={p.me ? "" : p._id}>
+                    {p.me ? `Me (${p.name})` : p.name}
+                    {p.position ? ` — ${POSITION_LABEL[p.position]}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button className="btn-primary" onClick={downloadPdf} disabled={!content || busy !== null}>
+            {busy === "pdf" ? <Spinner /> : <DownloadIcon />}
+            Download PDF
+          </button>
+        </div>
       </div>
 
       {/* Period + date */}
@@ -211,8 +243,15 @@ export default function EodView() {
           <Spinner className="h-6 w-6" />
         </div>
       ) : (
-        <>
-          <StatusLine page={page} dirty={dirty} kind={kind} />
+        <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-6 border-0 p-0">
+          {readOnly ? (
+            <p className="rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm">
+              👁 You&apos;re viewing <strong>{viewing?.name}</strong>&apos;s {kind} —{" "}
+              {page.saved ? `saved by them ${timeAgo(page.updatedAt)}` : "not saved yet, so this is the automatic version"}. Only they can edit it.
+            </p>
+          ) : (
+            <StatusLine page={page} dirty={dirty} kind={kind} />
+          )}
 
           {/* Attendance */}
           <section className="card p-4">
@@ -362,30 +401,40 @@ export default function EodView() {
             rows={4}
             onChange={(v) => edit({ plan: v })}
           />
+        </fieldset>
+      )}
 
-          {/* Sticky actions */}
+      {/* Sticky actions (outside the read-only fieldset, so Download still works) */}
+      {page && content && busy !== "load" && (
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface/90 backdrop-blur">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
               <p className="mr-auto text-xs text-muted">
-                {dirty ? "Unsaved changes" : page.saved ? `Saved ${timeAgo(page.updatedAt)}` : `Automatic ${kind} — not saved yet`}
+                {readOnly
+                  ? `${viewing?.name ?? "Their"} ${kind} · read-only`
+                  : dirty
+                    ? "Unsaved changes"
+                    : page.saved
+                      ? `Saved ${timeAgo(page.updatedAt)}`
+                      : `Automatic ${kind} — not saved yet`}
               </p>
-              {page.saved && (
+              {!readOnly && page.saved && (
                 <button className="btn-ghost py-1.5 text-sm" onClick={reset} disabled={busy !== null}>
                   {busy === "reset" ? <Spinner /> : null}
                   Reset to automatic
                 </button>
               )}
-              <button className="btn-ghost py-1.5 text-sm" onClick={save} disabled={busy !== null || (!dirty && page.saved)}>
-                {busy === "save" ? <Spinner /> : null}
-                Save {kind}
-              </button>
+              {!readOnly && (
+                <button className="btn-ghost py-1.5 text-sm" onClick={save} disabled={busy !== null || (!dirty && page.saved)}>
+                  {busy === "save" ? <Spinner /> : null}
+                  Save {kind}
+                </button>
+              )}
               <button className="btn-primary py-1.5 text-sm" onClick={downloadPdf} disabled={busy !== null}>
                 {busy === "pdf" ? <Spinner /> : <DownloadIcon />}
                 Download PDF
               </button>
             </div>
           </div>
-        </>
       )}
 
       {toast && (

@@ -175,7 +175,7 @@ Commands (if you want to be exact):
 /new <title> — create a ticket for yourself
 /eod <text> — your end-of-day update (or just start a message with "EOD:")
 /report · /report week — this team's EOD / EOW summary
-/myeod · /myeod week — your own EOD / EOW as a PDF (edit it on the website's EOD / EOW page)
+/myeod · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
 /link <CODE> — link your account, or connect this group to a team
 /chatid — show this chat's id`;
 
@@ -393,7 +393,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     if (report) await ctx.reply(formatReportText(report));
   });
 
-  // /myeod → your EOD as a PDF, ready to forward to HR · /myeod week → your EOW
+  // /myeod → your EOD as a PDF, sent to you privately, ready to forward to HR · /myeod week → your EOW
   bot.command("myeod", async (ctx) => {
     const user = await findSender(ctx);
     if (!user) return warnNotLinked(ctx);
@@ -401,10 +401,21 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const page = await buildEodPage(String(user._id), period, dayKey(new Date(), appTimeZone()));
     if (!page) return;
     const pdf = await renderEodPdf(page);
-    await ctx.replyWithDocument(new InputFile(pdf, eodFileName(page)), {
-      caption: `${period === "day" ? "EOD" : "EOW"} — ${user.name}${page.saved ? "" : " (automatic; edit it on the EOD / EOW page)"}`,
-      ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}),
-    });
+    const kind = period === "day" ? "EOD" : "EOW";
+    const caption = `${kind} — ${user.name}${page.saved ? "" : " (automatic; edit it on the EOD / EOW page)"}`;
+    // Always to the person privately — never into the group.
+    try {
+      await ctx.api.sendDocument(ctx.from!.id, new InputFile(pdf, eodFileName(page)), { caption });
+    } catch {
+      // Telegram won't let a bot message someone who hasn't started a chat with it.
+      if (ctx.chat?.type === "private") return;
+      await ctx.reply(`📩 ${user.name}, I can't message you privately yet — open https://t.me/${ctx.me.username}?start=eod, tap Start, then send /myeod again.`, {
+        ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}),
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+    if (ctx.chat?.type !== "private") await react(ctx, "👍");
   });
 
   // ---------- group membership → team membership ----------

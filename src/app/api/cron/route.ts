@@ -4,7 +4,7 @@ import { SystemStatus } from "@/lib/models/SystemStatus";
 import { autoOfflineIdleUsers } from "@/lib/services";
 import { ALLOWED_UPDATES, getBot, webhookUrl } from "@/lib/botRuntime";
 import { BOT_COMMANDS } from "../../../../bot/bot";
-import { postScheduledReports, REPORT_SCHEDULE } from "../../../../bot/scheduler";
+import { postScheduledReports, remindMissingEods, REPORT_SCHEDULE } from "../../../../bot/scheduler";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +49,7 @@ export async function GET(req: Request) {
 
   // 2. Reports and auto-offline.
   try {
+    result.eodReminders = await remindMissingEods(bot.api);
     result.reportsPosted = await postScheduledReports(bot.api);
   } catch (err) {
     result.reports = `error: ${(err as Error).message}`;

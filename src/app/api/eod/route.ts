@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { jsonError, withUser } from "@/lib/api";
 import { buildEodPage, EOD_LIMITS, resetEod, saveEod } from "@/lib/eod";
+import { eodPeopleFor, eodTargetFor } from "@/lib/eodAccess";
 import { appTimeZone, dayKey, isYmd, weekStart } from "@/lib/time";
 import type { Period } from "@/lib/reports";
 
@@ -15,12 +16,18 @@ function params(q: URLSearchParams | { period?: string; date?: string }) {
   return { period, date: day, key: period === "day" ? day : weekStart(day) };
 }
 
-/** GET /api/eod?period=day|week&date=YYYY-MM-DD → your EOD / EOW (saved, or the automatic draft). */
+/**
+ * GET /api/eod?period=day|week&date=YYYY-MM-DD[&user=<id>] → an EOD / EOW (saved, or the automatic draft).
+ * Yours by default; Team Leads and Managers can open their people's (read-only). Also lists whose they can open.
+ */
 export const GET = withUser(async (req, { user }) => {
-  const p = params(new URL(req.url).searchParams);
-  const page = await buildEodPage(String(user._id), p.period, p.date);
+  const q = new URL(req.url).searchParams;
+  const p = params(q);
+  const target = await eodTargetFor(user, q.get("user"));
+  if (!target) return jsonError("You can't see this person's EOD", 403);
+  const [page, people] = await Promise.all([buildEodPage(target, p.period, p.date), eodPeopleFor(user)]);
   if (!page) return jsonError("Not found", 404);
-  return NextResponse.json({ page });
+  return NextResponse.json({ page, people, readOnly: target !== String(user._id) });
 });
 
 const text = (max: number) => z.string().max(max, "That's too long").transform((s) => s.trim());
