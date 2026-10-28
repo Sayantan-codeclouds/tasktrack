@@ -201,7 +201,8 @@ export async function buildPersonReport(userId: string, period: Period, date: st
       const d = dayOf(at);
       if (!d) continue;
       if (next === "online" && !d.firstOnline) d.firstOnline = at.toISOString();
-      if (next === "offline") d.lastOffline = at.toISOString();
+      // Logout = going offline and staying offline; coming back clears it.
+      d.lastOffline = next === "offline" ? at.toISOString() : null;
       d.timeline.push({ at: at.toISOString(), text: `${PRESENCE_TEXT[next] ?? next}${typeof note === "string" && note ? ` — ${note}` : ""}` });
     }
     add(clipEnd.getTime());

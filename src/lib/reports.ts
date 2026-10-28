@@ -605,7 +605,7 @@ export function reportFileName(r: TeamReport, ext: "csv" | "txt" | "pdf") {
   return `${slug}-${r.period === "day" ? "eod" : "eow"}-${r.from}.${ext}`;
 }
 
-function csvCell(v: unknown) {
+export function csvCell(v: unknown) {
   const s = v === null || v === undefined ? "" : String(v);
   const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s; // don't let spreadsheets run it as a formula
   return `"${safe.replace(/"/g, '""')}"`;

@@ -1,3 +1,4 @@
+import { TASK_STATUS_LABEL } from "./constants";
 import { formatDay } from "./time";
 import { startPdf } from "./pdf";
 import type { EodPage } from "./eod";
@@ -42,6 +43,56 @@ export function renderEodPdf(p: EodPage): Promise<Buffer> {
   pdf.paragraph(p.content.plan, "—");
 
   return pdf.finish(`${p.person.name} · ${title}`, p.timeZone);
+}
+
+/**
+ * Everyone's EOD / EOW in one PDF, for a Team Lead or Manager: per person, when they logged in and out,
+ * what they worked on, and their current open tickets.
+ */
+export function renderEveryoneEodPdf(pages: EodPage[], period: "day" | "week", from: string, to: string, timeZone: string): Promise<Buffer> {
+  const title = period === "day" ? "Everyone's EOD" : "Everyone's EOW";
+  const pdf = startPdf({ title, subtitle: rangeLabel(period, from, to), author: "TaskTrack" });
+  const dur = (min: number) => (min >= 60 ? `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m` : `${min}m`);
+
+  if (!pages.length) pdf.paragraph("", "Nobody to show.");
+  for (const p of pages) {
+    pdf.heading(`${p.person.name}${p.person.role ? ` · ${p.person.role}` : ""}`);
+    const a = period === "day" ? p.attendance[0] : null;
+    pdf.paragraph(
+      a
+        ? a.login
+          ? `Login ${a.login} · Logout ${a.logout || "—"} · Online ${dur(a.onlineMinutes)}${a.lateBy ? ` · Late ${dur(a.lateBy)}` : ""}`
+          : "Not online this day."
+        : `Active ${p.totals.activeDays}/${p.totals.workDays} days · Online ${dur(p.totals.onlineMinutes)} · Late ${p.totals.lateDays} day(s)`,
+    );
+    if (p.content.summary.trim()) pdf.paragraph(p.content.summary);
+    if (p.content.tasks.length) {
+      pdf.table(
+        [
+          { label: "Ticket", w: 0.11 },
+          { label: period === "day" ? "Worked on" : "Worked on this week", w: 0.4 },
+          { label: "Status", w: 0.14 },
+          { label: "Progress", w: 0.14 },
+          { label: "Remarks", w: 0.21 },
+        ],
+        p.content.tasks.map((t) => [t.ticket, t.title, t.status, t.progress, t.remarks]),
+      );
+    }
+    if (p.openTasks.length) {
+      pdf.table(
+        [
+          { label: "Ticket", w: 0.11 },
+          { label: "Current tasks", w: 0.54 },
+          { label: "Status", w: 0.2 },
+          { label: "Progress", w: 0.15, align: "right" },
+        ],
+        p.openTasks.map((t) => [t.key, t.title, TASK_STATUS_LABEL[t.status], `${t.progress}%`]),
+      );
+    }
+    if (!p.content.tasks.length && !p.openTasks.length) pdf.paragraph("", "No tasks.");
+    if (p.content.blockers.trim()) pdf.paragraph(`Blockers: ${p.content.blockers}`);
+  }
+  return pdf.finish(title, timeZone);
 }
 
 /** "Tuesday, 27 October 2026" or "26 October – 1 November 2026". */

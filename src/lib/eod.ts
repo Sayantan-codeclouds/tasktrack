@@ -5,7 +5,7 @@ import { ReportDownload } from "./models/ReportDownload";
 import { TASK_STATUS_LABEL } from "./constants";
 import { buildPersonReport, type PersonDay, type PersonReport } from "./personReport";
 import { formatDay, weekStart } from "./time";
-import type { Period } from "./reports";
+import { csvCell, type Period } from "./reports";
 
 // A member's EOD / EOW page: an automatic draft from their day(s), which they can edit, save and download.
 // The EOW draft is put together from that week's EODs — the saved ones where they exist.
@@ -41,6 +41,8 @@ export interface EodPage {
   draft: EodContent;
   attendance: EodAttendance[];
   totals: PersonReport["totals"];
+  /** Their open tickets right now. */
+  openTasks: PersonReport["openTasks"];
 }
 
 export const EOD_LIMITS = { text: 4000, short: 40, title: 200, rows: 60 } as const;
@@ -173,6 +175,7 @@ export async function buildEodPage(userId: string, period: Period, date: string)
       lateBy: person.lateBy,
     })),
     totals: r.totals,
+    openTasks: r.openTasks,
   };
 }
 
@@ -195,6 +198,47 @@ export async function resetEod(userId: string, period: Period, key: string) {
   await connectDB();
   await ReportDoc.deleteOne({ user: new Types.ObjectId(userId), period, key });
 }
+
+/**
+ * EODs as one CSV: a row per task worked on, then everyone's current open tickets.
+ * `attendance` adds login / logout / online time (for Team Leads and Managers — not the HR copy).
+ */
+export function eodCsv(pages: EodPage[], opts: { attendance: boolean }) {
+  const att = (p: EodPage) => {
+    const a = p.period === "day" ? p.attendance[0] : null;
+    return a ? [a.login, a.logout, dur(a.onlineMinutes)] : ["", "", dur(p.totals.onlineMinutes)];
+  };
+  const kind = pages[0]?.period === "week" ? "EOW" : "EOD";
+  const rows: unknown[][] = [];
+  rows.push([kind, pages[0] ? (pages[0].period === "day" ? pages[0].from : `${pages[0].from} to ${pages[0].to}`) : ""]);
+  rows.push([]);
+  rows.push(["Name", "Role", "Team", ...(opts.attendance ? ["Login", "Logout", "Online"] : []), "Ticket", "Task", "Status", "Progress", "Remarks", "Summary", "Blockers", "Plan"]);
+  for (const p of pages) {
+    const who = [p.person.name, p.person.role ?? "", p.person.teams.join(", "), ...(opts.attendance ? att(p) : [])];
+    const tasks = p.content.tasks.length ? p.content.tasks : [null];
+    tasks.forEach((t, i) =>
+      rows.push([
+        ...who,
+        t?.ticket ?? "",
+        t?.title ?? "",
+        t?.status ?? "",
+        t?.progress ?? "",
+        t?.remarks ?? "",
+        // The written parts once per person.
+        ...(i === 0 ? [p.content.summary, p.content.blockers, p.content.plan] : ["", "", ""]),
+      ]),
+    );
+  }
+  rows.push([], ["CURRENT TASKS (open right now)"]);
+  rows.push(["Name", "Ticket", "Task", "Status", "Progress", "Due"]);
+  for (const p of pages) {
+    for (const t of p.openTasks) rows.push([p.person.name, t.key, t.title, TASK_STATUS_LABEL[t.status], `${t.progress}%`, t.dueDate ? t.dueDate.slice(0, 10) : ""]);
+  }
+  // BOM so Excel opens UTF-8 correctly.
+  return "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+
+const dur = (min: number) => (min >= 60 ? `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m` : `${min}m`);
 
 /** e.g. "eod-sayantan-das-2026-10-27.pdf" */
 export function eodFileName(p: EodPage) {

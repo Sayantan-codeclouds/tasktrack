@@ -1,15 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, readPref, timeAgo, writePref } from "@/lib/client";
-import { POSITION_LABEL, type Position } from "@/lib/constants";
+import { POSITION_GROUP, POSITION_LABEL, type Position } from "@/lib/constants";
 import type { EodContent, EodPage, EodTaskRow } from "@/lib/eod";
-import { Spinner } from "./ui";
+import { Avatar, Spinner, TaskStatusBadge } from "./ui";
 
 type Period = "day" | "week";
 type Person = { _id: string; name: string; position: Position | null; me: boolean };
 
 const PERIOD_PREF = "tt.eod.period";
+/** "Viewing" value for everyone's EODs and current tasks (Team Leads and Managers). */
+const EVERYONE = "all";
 
 // ---------- date helpers (browser-local calendar days) ----------
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -46,7 +48,11 @@ export default function EodView() {
   const [viewUser, setViewUser] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
   const [readOnly, setReadOnly] = useState(false);
+  const [everyone, setEveryone] = useState<EodPage[] | null>(null);
+  /** Managers start on everyone's view — once, so picking "Me" afterwards sticks. */
+  const picked = useRef(false);
   const inBrowser = useInBrowser();
+  const all = viewUser === EVERYONE;
 
   useEffect(() => {
     if (readPref(PERIOD_PREF) === "week") setPeriod("week");
@@ -62,12 +68,22 @@ export default function EodView() {
     let cancelled = false;
     setBusy("load");
     setError(null);
-    api<{ page: EodPage; people: Person[]; readOnly: boolean }>(`/api/eod?period=${period}&date=${date}${viewUser ? `&user=${viewUser}` : ""}`)
-      .then((r) => {
+    const forUser = viewUser && viewUser !== EVERYONE ? `&user=${viewUser}` : "";
+    Promise.all([
+      api<{ page: EodPage; people: Person[]; readOnly: boolean }>(`/api/eod?period=${period}&date=${date}${forUser}`),
+      viewUser === EVERYONE ? api<{ pages: EodPage[] }>(`/api/eod/everyone?period=${period}&date=${date}`) : null,
+    ])
+      .then(([r, e]) => {
         if (cancelled) return;
         show(r.page);
         setPeople(r.people);
-        setReadOnly(r.readOnly);
+        setReadOnly(r.readOnly || !!e);
+        setEveryone(e?.pages ?? null);
+        const me = r.people.find((p) => p.me);
+        if (!picked.current && !viewUser && r.people.length > 1 && me?.position && POSITION_GROUP[me.position] === "management") {
+          setViewUser(EVERYONE);
+        }
+        picked.current = true;
       })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setBusy(null));
@@ -138,12 +154,15 @@ export default function EodView() {
     }
   }
 
-  async function downloadPdf() {
-    // The PDF is made from what's saved, so save first.
+  async function download(format: "pdf" | "csv") {
+    // Downloads are made from what's saved, so save first.
     if (!readOnly && dirty && !(await save())) return;
     setBusy("pdf");
-    window.location.href = `/api/eod/pdf?period=${period}&date=${date}${viewUser ? `&user=${viewUser}` : ""}`;
-    if (!readOnly) setPage((p) => (p ? { ...p, downloadedAt: new Date().toISOString() } : p));
+    window.location.href = all
+      ? `/api/eod/everyone?period=${period}&date=${date}&format=${format}`
+      : `/api/eod/pdf?period=${period}&date=${date}${viewUser ? `&user=${viewUser}` : ""}&format=${format}`;
+    // Only your own PDF counts as downloaded for HR.
+    if (!readOnly && format === "pdf") setPage((p) => (p ? { ...p, downloadedAt: new Date().toISOString() } : p));
     setTimeout(() => setBusy(null), 1500);
   }
 
@@ -166,6 +185,7 @@ export default function EodView() {
         : "";
   const kind = period === "day" ? "EOD" : "EOW";
   const viewing = people.find((p) => (viewUser ? p._id === viewUser : p.me));
+  const others = people.filter((p) => !p.me);
 
   return (
     <div className="space-y-6 pb-24">
@@ -174,7 +194,9 @@ export default function EodView() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">EOD / EOW</h1>
           <p className="mt-0.5 text-sm text-muted">
-            {readOnly
+            {all
+              ? `Everyone's ${kind} and current tasks — ${others.length} ${others.length === 1 ? "person" : "people"}.`
+              : readOnly
               ? `${viewing?.name ?? "This person"}'s end-of-day and end-of-week report — read-only.`
               : "Your end-of-day and end-of-week report. Filled in automatically — edit it, save, and download the PDF for HR."}
           </p>
@@ -184,6 +206,7 @@ export default function EodView() {
             <label className="flex items-center gap-2 text-sm">
               <span className="text-muted">Viewing</span>
               <select className="input w-auto py-1.5" value={viewUser} onChange={(e) => go({ user: e.target.value })} aria-label="Whose report">
+                <option value={EVERYONE}>Everyone — {kind} &amp; current tasks</option>
                 {people.map((p) => (
                   <option key={p._id} value={p.me ? "" : p._id}>
                     {p.me ? `Me (${p.name})` : p.name}
@@ -193,10 +216,7 @@ export default function EodView() {
               </select>
             </label>
           )}
-          <button className="btn-primary" onClick={downloadPdf} disabled={!content || busy !== null}>
-            {busy === "pdf" ? <Spinner /> : <DownloadIcon />}
-            Download PDF
-          </button>
+          <DownloadMenu onPick={download} disabled={!content || busy !== null} busy={busy === "pdf"} label={all ? `Download everyone's ${kind}` : "Download"} />
         </div>
       </div>
 
@@ -243,6 +263,8 @@ export default function EodView() {
         <div className="flex justify-center py-20 text-muted">
           <Spinner className="h-6 w-6" />
         </div>
+      ) : all ? (
+        <Everyone pages={everyone ?? []} period={period} kind={kind} onOpen={(id) => go({ user: id })} />
       ) : (
         <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-6 border-0 p-0">
           {readOnly ? (
@@ -426,7 +448,7 @@ export default function EodView() {
       )}
 
       {/* Sticky actions (outside the read-only fieldset, so Download still works) */}
-      {page && content && busy !== "load" && (
+      {page && content && busy !== "load" && !all && (
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface/90 backdrop-blur">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
               <p className="mr-auto text-xs text-muted">
@@ -450,10 +472,7 @@ export default function EodView() {
                   Save {kind}
                 </button>
               )}
-              <button className="btn-primary py-1.5 text-sm" onClick={downloadPdf} disabled={busy !== null}>
-                {busy === "pdf" ? <Spinner /> : <DownloadIcon />}
-                Download PDF
-              </button>
+              <DownloadMenu onPick={download} disabled={busy !== null} busy={busy === "pdf"} label="Download" up small />
             </div>
           </div>
       )}
@@ -537,6 +556,170 @@ function TextSection({
       </div>
       <textarea id={id} className="input mt-3 min-h-20 resize-y text-sm leading-relaxed" rows={rows} value={value} onChange={(e) => onChange(e.target.value)} maxLength={4000} />
     </section>
+  );
+}
+
+/** "Download ▾" → PDF or CSV. */
+function DownloadMenu({
+  onPick,
+  disabled,
+  busy,
+  label,
+  up = false,
+  small = false,
+}: {
+  onPick: (format: "pdf" | "csv") => void;
+  disabled: boolean;
+  busy: boolean;
+  label: string;
+  up?: boolean;
+  small?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const pick = (f: "pdf" | "csv") => {
+    setOpen(false);
+    onPick(f);
+  };
+  return (
+    <div ref={ref} className="relative">
+      <button className={`btn-primary ${small ? "py-1.5 text-sm" : ""}`} onClick={() => setOpen((o) => !o)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}>
+        {busy ? <Spinner /> : <DownloadIcon />}
+        {label}
+        <span aria-hidden className="text-xs opacity-80">▾</span>
+      </button>
+      {open && (
+        <div role="menu" className={`card absolute right-0 z-30 w-52 p-1 shadow-lg ${up ? "bottom-full mb-2" : "top-full mt-2"}`}>
+          <button role="menuitem" className="flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm hover:bg-surface-2" onClick={() => pick("pdf")}>
+            <span className="font-medium">PDF</span>
+            <span className="text-xs text-muted">Ready to upload or print</span>
+          </button>
+          <button role="menuitem" className="flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm hover:bg-surface-2" onClick={() => pick("csv")}>
+            <span className="font-medium">CSV</span>
+            <span className="text-xs text-muted">Opens in Excel / Google Sheets</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Everyone's EOD / EOW and current tasks, a card per person (Team Leads and Managers). */
+function Everyone({ pages, period, kind, onOpen }: { pages: EodPage[]; period: Period; kind: string; onOpen: (id: string) => void }) {
+  if (!pages.length) return <p className="card p-6 text-center text-sm text-muted">Nobody to show.</p>;
+  const sorted = [...pages].sort((a, b) => b.openTasks.length - a.openTasks.length || a.person.name.localeCompare(b.person.name));
+  const open = pages.reduce((n, p) => n + p.openTasks.length, 0);
+  const notOnline = period === "day" ? pages.filter((p) => !p.attendance[0]?.login).length : 0;
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Fact label="People" value={String(pages.length)} />
+        <Fact label="Current tasks" value={String(open)} />
+        <Fact label={`${kind}s saved`} value={`${pages.filter((p) => p.saved).length}/${pages.length}`} />
+        {period === "day" ? <Fact label="Not online" value={String(notOnline)} /> : <Fact label="PDFs downloaded" value={`${pages.filter((p) => p.downloadedAt).length}/${pages.length}`} />}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {sorted.map((p) => {
+          const a = period === "day" ? p.attendance[0] : null;
+          return (
+            <article key={p.person._id} className="card flex flex-col p-4">
+              <div className="flex items-start gap-3">
+                <Avatar name={p.person.name} id={p.person._id} size={36} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold">{p.person.name}</p>
+                  <p className="truncate text-xs text-muted">
+                    {p.person.role ?? "No role"}
+                    {p.person.teams.length ? ` · ${p.person.teams.join(", ")}` : ""}
+                  </p>
+                </div>
+                <button className="btn-ghost shrink-0 py-1 text-xs" onClick={() => onOpen(p.person._id)}>
+                  Open {kind}
+                </button>
+              </div>
+
+              <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+                {a ? (
+                  a.login ? (
+                    <>
+                      <span>
+                        Login <strong className="text-fg tabular-nums">{a.login}</strong>
+                      </span>
+                      <span>
+                        Logout <strong className="text-fg tabular-nums">{a.logout || "—"}</strong>
+                      </span>
+                      <span>
+                        Online <strong className="text-fg tabular-nums">{dur(a.onlineMinutes)}</strong>
+                      </span>
+                      {a.lateBy ? <span className="font-semibold text-danger">⏰ {dur(a.lateBy)} late</span> : null}
+                    </>
+                  ) : (
+                    <span className="font-semibold text-danger">Not online</span>
+                  )
+                ) : (
+                  <span>
+                    Active <strong className="text-fg">{p.totals.activeDays}/{p.totals.workDays}</strong> days · Online{" "}
+                    <strong className="text-fg">{dur(p.totals.onlineMinutes)}</strong>
+                  </span>
+                )}
+                <span className={p.saved ? "text-online" : ""}>{p.saved ? `✓ ${kind} saved` : `${kind} automatic`}</span>
+                <span className={p.downloadedAt ? "text-online" : ""}>{p.downloadedAt ? "PDF downloaded" : "PDF not downloaded"}</span>
+              </p>
+
+              <h3 className="mt-3 text-[11px] font-semibold tracking-wide text-muted uppercase">Current tasks</h3>
+              {p.openTasks.length ? (
+                <ul className="mt-1.5 space-y-1.5">
+                  {p.openTasks.map((t) => (
+                    <li key={t.key} className="flex items-center gap-2 text-sm">
+                      <span className="shrink-0 font-mono text-[11px] text-muted">{t.key}</span>
+                      <span className="min-w-0 flex-1 truncate" title={t.title}>
+                        {t.title}
+                      </span>
+                      <TaskStatusBadge status={t.status} />
+                      <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted">{t.progress}%</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-sm text-muted">No open tasks.</p>
+              )}
+
+              {p.content.tasks.length > 0 && (
+                <>
+                  <h3 className="mt-3 text-[11px] font-semibold tracking-wide text-muted uppercase">
+                    Worked on {period === "day" ? "today" : "this week"}
+                  </h3>
+                  <ul className="mt-1.5 space-y-1 text-sm">
+                    {p.content.tasks.map((t, i) => (
+                      <li key={i} className="flex gap-2">
+                        <span className="shrink-0 font-mono text-[11px] text-muted">{t.ticket}</span>
+                        <span className="min-w-0 flex-1 truncate" title={t.title}>
+                          {t.title}
+                        </span>
+                        <span className="shrink-0 text-xs tabular-nums text-muted">{[t.status, t.progress].filter(Boolean).join(" · ")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              {p.content.summary.trim() && <p className="mt-3 line-clamp-3 text-sm whitespace-pre-line text-muted">{p.content.summary}</p>}
+              {p.content.blockers.trim() && <p className="mt-2 text-sm text-danger">⛔ {p.content.blockers}</p>}
+            </article>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
