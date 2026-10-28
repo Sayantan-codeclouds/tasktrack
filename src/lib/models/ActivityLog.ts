@@ -37,6 +37,8 @@ const ActivityLogSchema = new Schema<IActivityLog>(
 
 ActivityLogSchema.index({ createdAt: -1 });
 ActivityLogSchema.index({ user: 1, createdAt: -1 });
+// Someone's own EOD / EOW looks up what they did (as actor).
+ActivityLogSchema.index({ actor: 1, createdAt: -1 });
 ActivityLogSchema.index({ type: 1, createdAt: -1 });
 ActivityLogSchema.index({ team: 1, createdAt: -1 });
 

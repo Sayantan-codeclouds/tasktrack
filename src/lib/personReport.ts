@@ -6,7 +6,7 @@ import { Task } from "./models/Task";
 import { ActivityLog } from "./models/ActivityLog";
 import { POSITION_LABEL, TASK_STATUS, ticketKey, type Position, type TaskStatus } from "./constants";
 import { addDays, appTimeZone, dayKey, startOfDay, weekdayOf, weekStart } from "./time";
-import { reportWorkDays, type Period } from "./reports";
+import { presenceChangeAt, reportWorkDays, type Period } from "./reports";
 
 // One person's EOD (a day) or EOW (a week — simply that week's EODs, plus totals),
 // built from what they did in Telegram and on the site. This is what members send to HR.
@@ -194,14 +194,15 @@ export async function buildPersonReport(userId: string, period: Period, date: st
     for (const c of changes) {
       const next = String((c.meta as Meta)?.to ?? "offline");
       const note = (c.meta as Meta)?.note;
-      add(c.createdAt.getTime());
+      const at = new Date(Math.max(presenceChangeAt(c), since));
+      add(at.getTime());
       state = next;
-      since = c.createdAt.getTime();
-      const d = dayOf(c.createdAt);
+      since = at.getTime();
+      const d = dayOf(at);
       if (!d) continue;
-      if (next === "online" && !d.firstOnline) d.firstOnline = c.createdAt.toISOString();
-      if (next === "offline") d.lastOffline = c.createdAt.toISOString();
-      d.timeline.push({ at: c.createdAt.toISOString(), text: `${PRESENCE_TEXT[next] ?? next}${typeof note === "string" && note ? ` — ${note}` : ""}` });
+      if (next === "online" && !d.firstOnline) d.firstOnline = at.toISOString();
+      if (next === "offline") d.lastOffline = at.toISOString();
+      d.timeline.push({ at: at.toISOString(), text: `${PRESENCE_TEXT[next] ?? next}${typeof note === "string" && note ? ` — ${note}` : ""}` });
     }
     add(clipEnd.getTime());
   }

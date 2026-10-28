@@ -138,6 +138,7 @@ export async function setPresence(
   presence: Presence,
   note: string | null,
   ctx: ActivityContext,
+  extraMeta?: Record<string, unknown>,
 ): Promise<boolean> {
   await connectDB();
   const user = await User.findById(userId);
@@ -159,7 +160,7 @@ export async function setPresence(
       type: "status_change",
       user: user._id,
       message: `${user.name} is now ${label}${cleanNote ? ` — "${cleanNote}"` : ""}`,
-      meta: { from: previous, to: presence, note: cleanNote },
+      meta: { from: previous, to: presence, note: cleanNote, ...extraMeta },
     },
     ctx,
   );
@@ -401,9 +402,11 @@ export async function autoOfflineIdleUsers(idleMinutes: number) {
   const idle = await User.find({
     presence: { $ne: "offline" },
     $or: [{ lastSeenAt: { $lt: cutoff } }, { lastSeenAt: null, presenceSince: { $lt: cutoff } }],
-  }).select("_id");
+  }).select("_id lastSeenAt presenceSince");
   for (const u of idle) {
-    await setPresence(u._id, "offline", `No activity for ${idleMinutes} min`, { source: "system" });
+    // Reports end their online time when they were last seen, not now (up to idleMinutes later).
+    const lastSeenAt = u.lastSeenAt ?? u.presenceSince;
+    await setPresence(u._id, "offline", `No activity for ${idleMinutes} min`, { source: "system" }, lastSeenAt ? { lastSeenAt: lastSeenAt.toISOString() } : undefined);
   }
   return idle.length;
 }

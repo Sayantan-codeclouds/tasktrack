@@ -118,6 +118,18 @@ const isStatus = (v: unknown): v is TaskStatus => typeof v === "string" && (TASK
 type Meta = Record<string, unknown> | null | undefined;
 const num = (v: unknown) => (typeof v === "number" ? v : undefined);
 
+/**
+ * When a status change really took effect. Auto-offline is logged when the idleness is noticed — up to
+ * AUTO_OFFLINE_MINUTES after the person was last seen — so it counts from when they were last seen.
+ */
+export function presenceChangeAt(c: { createdAt: Date; meta?: unknown }) {
+  const meta = c.meta as Meta;
+  const logged = c.createdAt.getTime();
+  // Entries from before lastSeenAt was recorded are left as they were.
+  const seen = typeof meta?.lastSeenAt === "string" ? Date.parse(meta.lastSeenAt) : NaN;
+  return Number.isNaN(seen) ? logged : Math.min(seen, logged);
+}
+
 export async function buildTeamReport(
   teamId: string,
   period: Period,
@@ -379,14 +391,15 @@ export async function buildTeamReport(
       const id = String(c.user);
       const to = String((c.meta as Meta)?.to ?? "offline");
       const note2 = (c.meta as Meta)?.note;
-      add(id, c.createdAt.getTime());
+      const at = Math.max(presenceChangeAt(c), since.get(id) ?? start.getTime());
+      add(id, at);
       state.set(id, to);
-      since.set(id, c.createdAt.getTime());
+      since.set(id, at);
       const p = people.get(id);
       if (!p) continue;
-      const d = dayOf(p, dayKey(c.createdAt, tz));
-      if (to === "online" && !d.firstOnline) d.firstOnline = c.createdAt.toISOString();
-      d.events.push({ at: c.createdAt.toISOString(), kind: "presence", text: `${PRESENCE_TEXT[to] ?? to}${typeof note2 === "string" && note2 ? ` — ${note2}` : ""}` });
+      const d = dayOf(p, dayKey(new Date(at), tz));
+      if (to === "online" && !d.firstOnline) d.firstOnline = new Date(at).toISOString();
+      d.events.push({ at: new Date(at).toISOString(), kind: "presence", text: `${PRESENCE_TEXT[to] ?? to}${typeof note2 === "string" && note2 ? ` — ${note2}` : ""}` });
     }
     for (const id of people.keys()) add(id, clipEnd.getTime());
     for (const p of people.values()) {
