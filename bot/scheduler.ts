@@ -4,7 +4,8 @@ import { User } from "../src/lib/models/User";
 import { buildTeamReport, formatReportCsv, formatReportText, owesEod, reportFileName, reportWorkDays } from "../src/lib/reports";
 import { ReportDownload } from "../src/lib/models/ReportDownload";
 import { appTimeZone, localParts, weekStart } from "../src/lib/time";
-import { isHhmm } from "../src/lib/constants";
+import { POSITIONS, POSITION_RANK, isHhmm } from "../src/lib/constants";
+import { renderTeamReportPdf } from "../src/lib/teamReportPdf";
 import { adminUserIds } from "../src/lib/admin";
 
 /** Default EOD time for teams without a shift end; EOW goes out at the same time on REPORT_EOW_DAY. */
@@ -15,10 +16,21 @@ const WORK_DAYS = reportWorkDays();
 /** How long before the EOD to remind people who haven't done theirs. 0 turns it off. */
 const EOD_REMINDER_MINUTES = Number(process.env.REPORT_EOD_REMINDER_MINUTES ?? 30);
 
+/** Managers and above (not the admin) with Telegram linked: they get every team's EOD / EOW privately. */
+async function managersOnTelegram() {
+  return User.find({
+    role: { $ne: "admin" },
+    position: { $in: POSITIONS.filter((p) => POSITION_RANK[p] >= POSITION_RANK.manager) },
+    telegramId: { $ne: null },
+  })
+    .select("name telegramId")
+    .lean();
+}
+
 /**
- * Called every minute. Once it's past EOD_TIME on a workday, posts each connected team's EOD
- * (and EOW on EOW_DAY) exactly once — the claim on lastEodPostedFor/lastEowPostedFor makes it safe
- * across restarts and if two bot processes ever run.
+ * Called every minute. Once it's past a team's EOD time on a workday, posts its EOD (and EOW on EOW_DAY)
+ * exactly once — into the team's group if it has one, and privately to every Manager — the claim on
+ * lastEodPostedFor/lastEowPostedFor makes it safe across restarts and if two bot processes ever run.
  */
 export async function postScheduledReports(api: Api, now = new Date()) {
   const tz = appTimeZone();
@@ -26,9 +38,11 @@ export async function postScheduledReports(api: Api, now = new Date()) {
   if (!WORK_DAYS.includes(weekday)) return [];
   const posted: string[] = [];
 
-  const teams = await Team.find({ telegramChatId: { $ne: null }, reportsEnabled: { $ne: false } })
+  // Every team — Managers get the ones without a Telegram group too.
+  const teams = await Team.find({ reportsEnabled: { $ne: false } })
     .select("_id name telegramChatId shiftEnd")
     .lean();
+  let managers: Awaited<ReturnType<typeof managersOnTelegram>> | null = null;
   for (const t of teams) {
     // Each team's EOD goes out when its shift ends (default REPORT_EOD_TIME).
     if (hhmm < (isHhmm(t.shiftEnd) ? t.shiftEnd : EOD_TIME)) continue;
@@ -42,13 +56,30 @@ export async function postScheduledReports(api: Api, now = new Date()) {
       try {
         const report = await buildTeamReport(String(t._id), job.period, ymd, { hideUserIds: await adminUserIds() });
         if (!report) continue;
-        await api.sendMessage(t.telegramChatId!, formatReportText(report));
+        const text = formatReportText(report);
+        if (t.telegramChatId) {
+          await api.sendMessage(t.telegramChatId, text);
+          // The full report as a file anyone in the group can download. The message is already out,
+          // so a failure here mustn't release the claim and post it twice.
+          await api
+            .sendDocument(t.telegramChatId, new InputFile(Buffer.from(formatReportCsv(report), "utf8"), reportFileName(report, "csv")))
+            .catch((err) => console.error(`[reports] failed to attach ${job.period} file for ${t.name}:`, err));
+        }
         posted.push(`${t.name} ${job.period === "day" ? "EOD" : "EOW"}`);
-        // The full report as a file anyone in the group can download. The message is already out,
-        // so a failure here mustn't release the claim and post it twice.
-        await api
-          .sendDocument(t.telegramChatId!, new InputFile(Buffer.from(formatReportCsv(report), "utf8"), reportFileName(report, "csv")))
-          .catch((err) => console.error(`[reports] failed to attach ${job.period} file for ${t.name}:`, err));
+
+        // Every Manager gets it privately, with the PDF. One failing (e.g. never started the bot) doesn't stop the rest.
+        managers ??= await managersOnTelegram();
+        if (managers.length) {
+          const pdf = await renderTeamReportPdf(report);
+          for (const m of managers) {
+            try {
+              await api.sendMessage(m.telegramId!, text);
+              await api.sendDocument(m.telegramId!, new InputFile(pdf, reportFileName(report, "pdf")));
+            } catch (err) {
+              console.error(`[reports] couldn't send ${t.name}'s ${job.period} report to ${m.name}:`, (err as Error).message);
+            }
+          }
+        }
       } catch (err) {
         console.error(`[reports] failed to post ${job.period} report for ${t.name}:`, err);
         // Let the next minute retry.
