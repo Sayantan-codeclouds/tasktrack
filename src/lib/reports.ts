@@ -649,27 +649,21 @@ export function formatReportCsv(r: TeamReport): string {
   rows.push(["", "* = changed that day"]);
 
   rows.push([], ["PEOPLE"]);
-  rows.push(["Name", "In team", "Completed", "Ticket actions", "Online (min)", "Break (min)", "Late days", "Absent days", "Active days", "EOD notes"]);
+  rows.push(["Name", "In team", "Completed", "Moved", "New", "Ticket actions", "EOD notes"]);
   for (const m of r.members) {
-    rows.push([m.name, m.inTeam ? "yes" : "no", m.completed.length, m.events, m.onlineMinutes, m.breakMinutes, m.lateDays, m.absentDays.length, m.activeDays.length, m.eodNotes.map((n) => n.text).join(" | ")]);
+    rows.push([m.name, m.inTeam ? "yes" : "no", m.completed.length, m.progressed.length, m.created.length, m.events, m.eodNotes.map((n) => n.text).join(" | ")]);
   }
 
   rows.push([], ["PEOPLE — DAY BY DAY"]);
-  rows.push(["Name", "Day", "Absent", "Late by (min)", "Online (min)", "Break (min)", "What happened"]);
+  rows.push(["Name", "Day", "What happened"]);
   for (const m of r.members) {
     for (const d of r.days) {
-      const day = m.days[d];
-      if (!day) continue;
+      const work = m.days[d]?.events.filter((e) => e.kind !== "presence") ?? [];
+      if (!work.length) continue;
       rows.push([
         m.name,
         d,
-        day.absent ? "yes" : "",
-        day.lateBy ?? "",
-        day.onlineMinutes,
-        day.breakMinutes,
-        day.events
-          .filter((e) => e.kind !== "presence")
-          .map((e) => `${time(e.at)} ${e.ticket ? `${e.ticket.key} ${e.ticket.title}: ` : ""}${e.text}`).join(" | "),
+        work.map((e) => `${time(e.at)} ${e.ticket ? `${e.ticket.key} ${e.ticket.title}: ` : ""}${e.text}`).join(" | "),
       ]);
     }
   }
@@ -692,8 +686,9 @@ function list<T>(items: T[], line: (x: T) => string) {
   return shown.join("\n");
 }
 
-/** `loginTimes: false` for downloads — login / logout times only go in the Telegram message. */
-export function formatReportText(r: TeamReport, opts: { loginTimes?: boolean } = {}): string {
+/** `attendance: false` for downloads — the work only; login, online, late and absent stay in the Telegram message. */
+export function formatReportText(r: TeamReport, opts: { attendance?: boolean } = {}): string {
+  const att = opts.attendance !== false;
   const title =
     r.period === "day"
       ? `📋 EOD · ${r.team.name} · ${formatDay(r.from, { weekday: "short", day: "numeric", month: "short" })}`
@@ -723,14 +718,15 @@ export function formatReportText(r: TeamReport, opts: { loginTimes?: boolean } =
       `\n👥 People\n${list(people, (m) => {
         const day = r.period === "day" ? m.days[r.from] : undefined;
         const bits = [
-          day?.absent && !day.firstOnline && "🚫 absent",
-          opts.loginTimes !== false && day?.firstOnline && `login ${clock(day.firstOnline)}${day.lastOffline ? ` · logout ${clock(day.lastOffline)}` : ""}`,
-          r.period === "week" && m.absentDays.length && `🚫 absent ${m.absentDays.length} day${m.absentDays.length === 1 ? "" : "s"}`,
+          att && day?.absent && !day.firstOnline && "🚫 absent",
+          att && day?.firstOnline && `login ${clock(day.firstOnline)}${day.lastOffline ? ` · logout ${clock(day.lastOffline)}` : ""}`,
+          att && r.period === "week" && m.absentDays.length && `🚫 absent ${m.absentDays.length} day${m.absentDays.length === 1 ? "" : "s"}`,
           m.completed.length && `${m.completed.length} done`,
           m.events && `${m.events} ticket action${m.events === 1 ? "" : "s"}`,
-          r.period === "week" && m.activeDays.length && `active ${m.activeDays.length}/${r.workDays} days`,
-          m.onlineMinutes && `online ${formatDuration(m.onlineMinutes)}`,
-          m.lateDays &&
+          att && r.period === "week" && m.activeDays.length && `active ${m.activeDays.length}/${r.workDays} days`,
+          att && m.onlineMinutes && `online ${formatDuration(m.onlineMinutes)}`,
+          att &&
+            m.lateDays &&
             (r.period === "day"
               ? `⏰ late ${m.days[r.from]?.lateBy ?? 0}m`
               : `⏰ late ${m.lateDays} day${m.lateDays === 1 ? "" : "s"}`),

@@ -26,7 +26,7 @@ export const GET = withUser(async (req, { user }) => {
 
   const format = q.get("format");
   if (format === "csv") {
-    return new Response(eodCsv(pages, { attendance: true }), {
+    return new Response(eodCsv(pages), {
       headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${name}.csv"`, "Cache-Control": "no-store" },
     });
   }

@@ -276,20 +276,16 @@ export async function resetEod(userId: string, period: Period, key: string) {
 
 /**
  * EODs as one CSV: a row per task worked on, then everyone's current open tickets.
- * `attendance` adds online time (for Team Leads and Managers — not the HR copy). Login / logout times never go in a download.
+ * The work only — no attendance (login / logout, online, break, late, absent) in any download.
  */
-export function eodCsv(pages: EodPage[], opts: { attendance: boolean }) {
-  const att = (p: EodPage) => {
-    const a = p.period === "day" ? p.attendance[0] : null;
-    return [dur(a ? a.onlineMinutes : p.totals.onlineMinutes)];
-  };
+export function eodCsv(pages: EodPage[]) {
   const kind = pages[0]?.period === "week" ? "EOW" : "EOD";
   const rows: unknown[][] = [];
   rows.push([kind, pages[0] ? (pages[0].period === "day" ? pages[0].from : `${pages[0].from} to ${pages[0].to}`) : ""]);
   rows.push([]);
-  rows.push(["Name", "Role", "Team", ...(opts.attendance ? ["Online"] : []), "Ticket", "Task", "Status", "Progress", "Remarks", "Summary", "Blockers", "Plan"]);
+  rows.push(["Name", "Role", "Team", "Ticket", "Task", "Status", "Progress", "Remarks", "Summary", "Blockers", "Plan"]);
   for (const p of pages) {
-    const who = [p.person.name, p.person.role ?? "", p.person.teams.join(", "), ...(opts.attendance ? att(p) : [])];
+    const who = [p.person.name, p.person.role ?? "", p.person.teams.join(", ")];
     const tasks = p.content.tasks.length ? p.content.tasks : [null];
     tasks.forEach((t, i) =>
       rows.push([
@@ -312,8 +308,6 @@ export function eodCsv(pages: EodPage[], opts: { attendance: boolean }) {
   // BOM so Excel opens UTF-8 correctly.
   return "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
 }
-
-const dur = (min: number) => (min >= 60 ? `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m` : `${min}m`);
 
 /** e.g. "eod-sayantan-das-2026-10-27.pdf" */
 export function eodFileName(p: EodPage) {

@@ -3,7 +3,7 @@ import { startPdf } from "./pdf";
 import { rangeLabel } from "./eodPdf";
 import { partsText, type TeamReport } from "./reports";
 
-/** A team's EOD / EOW as a PDF for Managers and Team Leads: the work, plus who was late or absent (no login / logout times). */
+/** A team's EOD / EOW as a PDF for Managers and Team Leads: the work only — no attendance. */
 export function renderTeamReportPdf(r: TeamReport): Promise<Buffer> {
   const title = `${r.team.name} · Team ${r.period === "day" ? "EOD" : "EOW"} Report`;
   const pdf = startPdf({ title, subtitle: rangeLabel(r.period, r.from, r.to), author: r.team.name });
@@ -48,53 +48,25 @@ export function renderTeamReportPdf(r: TeamReport): Promise<Buffer> {
   }
 
   pdf.heading("People");
-  const attendance = (m: TeamReport["members"][number]) => {
-    if (r.period === "week") return m.absentDays.length ? `Absent ${m.absentDays.length}d` : m.lateDays ? `Late ${m.lateDays}d` : "—";
-    const d = m.days[r.from];
-    if (d?.absent) return d.firstOnline ? "Absent (came later)" : "Absent";
-    return d?.lateBy ? `Late ${d.lateBy}m` : d?.firstOnline ? "On time" : "—";
-  };
-  const people = r.members.filter((m) => m.inTeam || m.events);
   pdf.table(
-    r.period === "day"
-      ? [
-          { label: "Name", w: 0.24 },
-          { label: "Role", w: 0.2 },
-          { label: "Attendance", w: 0.18 },
-          { label: "Done", w: 0.1, align: "right" },
-          { label: "Moved", w: 0.1, align: "right" },
-          { label: "EOD", w: 0.18 },
-        ]
-      : [
-          { label: "Name", w: 0.22 },
-          { label: "Role", w: 0.18 },
-          { label: "Active days", w: 0.12, align: "right" },
-          { label: "Attendance", w: 0.16 },
-          { label: "Done", w: 0.08, align: "right" },
-          { label: "Moved", w: 0.08, align: "right" },
-          { label: "EOD notes", w: 0.16, align: "right" },
-        ],
-    people.map((m) => {
-      const eod = m.eodNotes.length ? "Written" : r.missingEodIds.includes(m._id) ? "Missing" : "—";
-      return r.period === "day"
-        ? [
-            m.name,
-            m.position ? POSITION_LABEL[m.position] : "—",
-            attendance(m),
-            String(m.completed.length),
-            String(m.progressed.length),
-            eod,
-          ]
-        : [
-            m.name,
-            m.position ? POSITION_LABEL[m.position] : "—",
-            `${m.activeDays.length}/${r.workDays}`,
-            attendance(m),
-            String(m.completed.length),
-            String(m.progressed.length),
-            String(m.eodNotes.length),
-          ];
-    }),
+    [
+      { label: "Name", w: 0.26 },
+      { label: "Role", w: 0.2 },
+      { label: "Done", w: 0.1, align: "right" },
+      { label: "Moved", w: 0.1, align: "right" },
+      { label: "New", w: 0.1, align: "right" },
+      { label: "EOD", w: 0.24 },
+    ],
+    r.members
+      .filter((m) => m.inTeam || m.events)
+      .map((m) => [
+        m.name,
+        m.position ? POSITION_LABEL[m.position] : "—",
+        String(m.completed.length),
+        String(m.progressed.length),
+        String(m.created.length),
+        r.period === "day" ? (m.eodNotes.length ? "Written" : r.missingEodIds.includes(m._id) ? "Missing" : "—") : `${m.eodNotes.length} note(s)`,
+      ]),
   );
 
   const notes = r.members.flatMap((m) => m.eodNotes.map((n) => ({ name: m.name, text: n.text })));

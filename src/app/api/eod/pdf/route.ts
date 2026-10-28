@@ -18,8 +18,7 @@ export const GET = withUser(async (req, { user }) => {
   const mine = target === String(user._id);
 
   if (q.get("format") === "csv") {
-    // Your own copy is the HR one (tasks only); a Team Lead / Manager also sees attendance.
-    return new Response(eodCsv([page], { attendance: !mine }), {
+    return new Response(eodCsv([page]), {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${eodFileName(page).replace(/\.pdf$/, ".csv")}"`,
