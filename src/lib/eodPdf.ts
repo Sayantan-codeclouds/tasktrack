@@ -18,7 +18,7 @@ export function renderEodPdf(p: EodPage): Promise<Buffer> {
   pdf.heading(p.period === "day" ? "Summary of the day" : "Summary of the week");
   pdf.paragraph(p.content.summary, "No summary written.");
 
-  const overseer = /manager/i.test(p.person.role ?? "");
+  const overseer = /manager|team lead/i.test(p.person.role ?? "");
   pdf.heading(overseer ? "Team tasks — open and done, and by whom" : p.period === "day" ? "Tasks worked on" : "Tasks this week");
   if (p.content.tasks.length) {
     pdf.table(

@@ -187,7 +187,7 @@ export default function EodView() {
   const viewing = people.find((p) => (viewUser ? p._id === viewUser : p.me));
   const others = people.filter((p) => !p.me);
   /** Managers' own EOD is their teams' work. */
-  const overseer = !!viewing?.position && POSITION_GROUP[viewing.position] === "management";
+  const overseer = !!viewing?.position && ["management", "lead"].includes(POSITION_GROUP[viewing.position]);
 
   return (
     <div className="space-y-6 pb-24">

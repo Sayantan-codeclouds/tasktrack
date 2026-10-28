@@ -132,16 +132,28 @@ const contentOf = (doc: Partial<EodContent>): EodContent => ({
 });
 
 /**
- * A Manager's automatic EOD / EOW: they oversee rather than work tickets, so it's their teams' work —
- * every open ticket and everything done, and by whom. Null for everyone else.
+ * A Manager's or Team Lead's automatic EOD / EOW: they oversee rather than work tickets, so it's their
+ * team's work — every open ticket and everything done, and by whom. A Manager covers all their teams,
+ * a Team Lead the one team they lead. Null for everyone else.
  */
 async function overseerDraft(userId: string, period: Period, date: string): Promise<EodContent | null> {
   const me = await User.findById(userId).select("position").lean();
-  if (!me?.position || POSITION_GROUP[me.position] !== "management") return null;
+  const group = me?.position ? POSITION_GROUP[me.position] : null;
+  if (group !== "management" && group !== "lead") return null;
   const uid = new Types.ObjectId(userId);
-  // The teams they manage or are in; a Manager with no team oversees them all.
-  let teams = await Team.find({ $or: [{ manager: uid }, { "members.user": uid }] }).select("_id name").sort({ name: 1 }).lean();
-  if (!teams.length) teams = await Team.find().select("_id name").sort({ name: 1 }).lean();
+  let teams;
+  if (group === "lead") {
+    // The team they lead, else the team they're in.
+    const team =
+      (await Team.findOne({ lead: uid }).select("_id name").sort({ createdAt: 1 }).lean()) ??
+      (await Team.findOne({ "members.user": uid }).select("_id name").sort({ createdAt: 1 }).lean());
+    if (!team) return null;
+    teams = [team];
+  } else {
+    // The teams they manage or are in; a Manager with no team oversees them all.
+    teams = await Team.find({ $or: [{ manager: uid }, { "members.user": uid }] }).select("_id name").sort({ name: 1 }).lean();
+    if (!teams.length) teams = await Team.find().select("_id name").sort({ name: 1 }).lean();
+  }
   const hide = await adminUserIds();
 
   const tasks: EodTaskRow[] = [];
@@ -222,7 +234,7 @@ export async function buildEodPage(userId: string, period: Period, date: string)
           days.filter((d) => d.saved || d.person.tickets.length || d.person.eodNotes.length),
           r,
         );
-  // Managers: their teams' work instead (keeping their own login / logout).
+  // Managers and Team Leads: their teams' work instead (keeping their own login / logout).
   const team = await overseerDraft(userId, period, r.from);
   const draft = team ? { ...team, login: own.login, logout: own.logout } : own;
   const [saved, download] = await Promise.all([ReportDoc.findOne({ user, period, key }).lean(), ReportDownload.findOne({ user, period, key }).lean()]);
