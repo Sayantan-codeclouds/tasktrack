@@ -46,7 +46,8 @@ export async function GET(req: Request) {
       result.webhook = `error: ${(err as Error).message}`;
     }
   } else {
-    result.webhook = "skipped (set APP_URL and TELEGRAM_WEBHOOK_SECRET)";
+    const missing = [!target && "APP_URL", !process.env.TELEGRAM_WEBHOOK_SECRET && "TELEGRAM_WEBHOOK_SECRET"].filter(Boolean);
+    result.webhook = `skipped — not set on the server: ${missing.join(", ")}`;
   }
 
   // 2. Reports and auto-offline.
