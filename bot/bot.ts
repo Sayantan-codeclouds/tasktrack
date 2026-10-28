@@ -26,6 +26,7 @@ import {
   type TelegramPerson,
 } from "../src/lib/teams";
 import { interpretMessage } from "./ai";
+import { createResetLink } from "../src/lib/passwordReset";
 
 const MIN_CONFIDENCE = Number(process.env.AI_MIN_CONFIDENCE ?? 0.6);
 const TIME_ZONE = process.env.APP_TIMEZONE || "UTC";
@@ -223,6 +224,7 @@ Commands (if you want to be exact):
 /eod <text> — your end-of-day update (or just start a message with "EOD:")
 /report · /report week — this team's EOD / EOW summary
 /myeod · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
+/forgotpass — forgot your tracker password? I'll send you a reset link privately
 /link <CODE> — link your account, or connect this group to a team
 /chatid — show this chat's id`;
 
@@ -438,6 +440,30 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     }
     await markEodDownloaded(String(user._id), page.period, page.from, "telegram");
     if (ctx.chat?.type !== "private") await react(ctx, "👍");
+  });
+
+  // /forgotpass → a one-time link to set a new tracker password, always sent privately.
+  // Telegram reads "/forgot-pass" as /forgot (commands can't contain "-"), so that works too.
+  bot.command(["forgot", "forgotpass", "forgot_password", "resetpassword"], async (ctx) => {
+    const reply = (text: string) =>
+      ctx.reply(text, { ...(ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : {}), link_preview_options: { is_disabled: true } });
+    const user = await findSender(ctx);
+    if (!user) return reply("Your Telegram isn't linked to a tracker account, so I can't check it's you. Ask your manager to help you get back in.");
+    const link = await createResetLink(user._id);
+    if ("error" in link) return reply(`❌ ${link.error}`);
+    try {
+      await ctx.api.sendMessage(
+        ctx.from!.id,
+        `🔑 Password reset for ${user.name} (${user.email})\n\n` +
+          `Open this link within 30 minutes to choose a new password:\n${link.url}\n\n` +
+          `It works once, and signs you out everywhere else. Didn't ask for this? Ignore it — nothing has changed.`,
+        { link_preview_options: { is_disabled: true } },
+      );
+    } catch {
+      // Telegram won't let a bot message someone who hasn't started a chat with it.
+      return reply(`📩 I can't message you privately yet — open https://t.me/${ctx.me.username}, tap Start, then send /forgotpass there.`);
+    }
+    if (ctx.chat?.type !== "private") await reply("📩 Sent you a reset link privately.");
   });
 
   // ---------- group membership → team membership ----------
@@ -676,6 +702,7 @@ export const BOT_COMMANDS = [
   { command: "eod", description: "Post your end-of-day update" },
   { command: "report", description: "Team EOD report (/report week for EOW)" },
   { command: "myeod", description: "Your EOD as a PDF (/myeod week for EOW)" },
+  { command: "forgotpass", description: "Forgot your tracker password? Get a reset link" },
   { command: "link", description: "Link your account or connect this group" },
   { command: "help", description: "How to use the bot" },
 ];

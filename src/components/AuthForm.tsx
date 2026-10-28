@@ -55,11 +55,15 @@ export default function AuthForm({
   mode,
   googleEnabled = false,
   initialError,
+  botUsername = null,
 }: {
   mode: "login" | "register";
   googleEnabled?: boolean;
   initialError?: string;
+  /** For "Forgot password?" — the reset link comes from the Telegram bot. */
+  botUsername?: string | null;
 }) {
+  const [forgotOpen, setForgotOpen] = useState(false);
   const router = useRouter();
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", position: "" });
   const needsApproval = Boolean(form.position) && !isSelfServeRole(form.position as Position);
@@ -183,7 +187,28 @@ export default function AuthForm({
               <input id="email" type="email" className="input" value={form.email} onChange={set("email")} required autoComplete="email" placeholder="you@company.com" />
             </div>
             <div>
-              <label className="label" htmlFor="password">Password</label>
+              <div className="flex items-baseline justify-between">
+                <label className="label" htmlFor="password">Password</label>
+                {!isRegister && (
+                  <button type="button" className="mb-1.5 text-xs font-medium text-accent hover:underline" onClick={() => setForgotOpen((o) => !o)} aria-expanded={forgotOpen}>
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              {forgotOpen && (
+                <div className="mb-3 rounded-lg border border-accent/30 bg-accent-soft/60 p-3 text-sm">
+                  <p>
+                    Send <code className="rounded bg-surface px-1 font-semibold">/forgotpass</code> to{" "}
+                    {botUsername ? <strong>@{botUsername}</strong> : "the TaskTrack bot"} in Telegram. It&apos;ll send you a private link to set a new password.
+                  </p>
+                  {botUsername && (
+                    <a href={`https://t.me/${botUsername}`} target="_blank" rel="noreferrer" className="btn-primary mt-2.5 w-full py-2">
+                      <TelegramIcon className="h-4 w-4" /> Open the bot
+                    </a>
+                  )}
+                  <p className="mt-2 text-xs text-muted">This works once your Telegram is linked to your account. If it isn&apos;t, ask your manager.</p>
+                </div>
+              )}
               <PasswordInput
                 id="password"
                 value={form.password}

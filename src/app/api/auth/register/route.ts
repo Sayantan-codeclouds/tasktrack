@@ -49,7 +49,7 @@ export async function POST(req: Request) {
       position: direct ? body.position : null,
       requestedPosition: body.position && !direct ? body.position : null,
     });
-    await startSession(String(user._id));
+    await startSession(user);
     await logActivity(
       {
         type: "login",

@@ -27,6 +27,11 @@ export interface IUser {
   avatarType?: string | null;
   /** Changes on every upload, so the photo URL can be cached forever. null = no photo. */
   avatarVersion?: number | null;
+  /** Password reset (asked for through the Telegram bot): sha256 of the one-time token, and when it stops working. */
+  resetTokenHash?: string | null;
+  resetTokenExpires?: Date | null;
+  /** Bumped to sign out every existing session (e.g. after a password reset). */
+  sessionVersion?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +56,9 @@ const UserSchema = new Schema<IUser>(
     avatar: { type: Buffer, default: null, select: false },
     avatarType: { type: String, default: null },
     avatarVersion: { type: Number, default: null },
+    resetTokenHash: { type: String, default: null, select: false },
+    resetTokenExpires: { type: Date, default: null },
+    sessionVersion: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

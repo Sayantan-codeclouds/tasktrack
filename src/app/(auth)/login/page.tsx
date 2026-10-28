@@ -8,5 +8,5 @@ export const metadata = { title: "Sign in · TaskTrack" };
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   if (await getCurrentUser()) redirect("/tracker");
   const { error } = await searchParams;
-  return <AuthForm mode="login" googleEnabled={googleEnabled()} initialError={error} />;
+  return <AuthForm mode="login" googleEnabled={googleEnabled()} initialError={error} botUsername={process.env.TELEGRAM_BOT_USERNAME || null} />;
 }

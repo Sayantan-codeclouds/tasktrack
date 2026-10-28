@@ -28,7 +28,7 @@ export async function POST(req: Request) {
       user.role = "admin";
       await user.save();
     }
-    await startSession(String(user._id));
+    await startSession(user);
     await logActivity(
       { type: "login", user: user._id, message: `${user.name} signed in to the tracker` },
       { source: "web" },

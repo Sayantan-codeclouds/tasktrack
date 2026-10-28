@@ -17,10 +17,11 @@ function secret() {
 export const hashPassword = (password: string) => bcrypt.hash(password, 10);
 export const verifyPassword = (password: string, hash: string) => bcrypt.compare(password, hash);
 
-export async function startSession(userId: string) {
-  const token = await new SignJWT({})
+export async function startSession(user: { _id: unknown; sessionVersion?: number }) {
+  // "v" ties the cookie to the account's sessionVersion, so bumping it signs out every old session.
+  const token = await new SignJWT({ v: user.sessionVersion ?? 0 })
     .setProtectedHeader({ alg: "HS256" })
-    .setSubject(userId)
+    .setSubject(String(user._id))
     .setIssuedAt()
     .setExpirationTime(`${MAX_AGE}s`)
     .sign(secret());
@@ -46,7 +47,10 @@ export async function getCurrentUser() {
     const { payload } = await jwtVerify(token, secret());
     if (!payload.sub) return null;
     await connectDB();
-    return await User.findById(payload.sub);
+    const user = await User.findById(payload.sub);
+    // Signed out everywhere since (e.g. password reset). Cookies from before versions existed count as 0.
+    if (!user || (typeof payload.v === "number" ? payload.v : 0) !== (user.sessionVersion ?? 0)) return null;
+    return user;
   } catch {
     return null;
   }

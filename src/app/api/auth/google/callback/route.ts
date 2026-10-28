@@ -64,7 +64,7 @@ export async function GET(req: Request) {
     }
   }
 
-  await startSession(String(user._id));
+  await startSession(user);
   await logActivity(
     {
       type: "login",
