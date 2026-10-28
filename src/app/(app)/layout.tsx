@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getImpersonatorId } from "@/lib/auth";
 import NavBar from "@/components/NavBar";
 import { canCreateTeams, canSeeReports } from "@/lib/constants";
 import { teamIdsForUser } from "@/lib/teams";
@@ -29,6 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         showReports={showReports}
         showTeam={canCreateTeams({ _id: String(user._id), role: user.role, position: user.position ?? null })}
         isAdmin={user.role === "admin"}
+        viewingAs={Boolean(await getImpersonatorId())}
       />
       <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">{children}</main>
     </>

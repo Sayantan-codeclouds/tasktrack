@@ -3,7 +3,7 @@ import { z } from "zod";
 import { jsonError, withUser } from "@/lib/api";
 import { Task } from "@/lib/models/Task";
 import { Team } from "@/lib/models/Team";
-import { hashPassword, verifyPassword } from "@/lib/auth";
+import { getImpersonatorId, hashPassword, verifyPassword } from "@/lib/auth";
 import { logActivity } from "@/lib/services";
 
 export const dynamic = "force-dynamic";
@@ -78,6 +78,7 @@ export const PATCH = withUser(async (req, { user }) => {
     changed.push("name");
   }
   if (body.newPassword) {
+    if (await getImpersonatorId()) return jsonError("Passwords can't be changed while viewing as someone", 403);
     // Google-only accounts have no password yet, so there's nothing to confirm.
     if (user.passwordHash && (!body.currentPassword || !(await verifyPassword(body.currentPassword, user.passwordHash)))) {
       return jsonError("Current password is incorrect", 400);

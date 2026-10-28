@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
-import { getCurrentUser } from "./auth";
+import { getCurrentUser, getImpersonatorId } from "./auth";
 import { User, type IUser } from "./models/User";
 
 export function jsonError(message: string, status = 400) {
@@ -33,6 +33,8 @@ export function withUser<C = unknown>(handler: Handler<C>) {
  */
 async function markSeen(req: Request, user: Pick<IUser, "_id" | "lastSeenAt">) {
   if (req.method === "GET" || (user.lastSeenAt && Date.now() - user.lastSeenAt.getTime() < 60_000)) return;
+  // The admin looking around as someone doesn't make that person "active".
+  if (await getImpersonatorId()) return;
   await User.updateOne({ _id: user._id }, { $set: { lastSeenAt: new Date() } });
 }
 

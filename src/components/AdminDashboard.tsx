@@ -71,6 +71,16 @@ export default function AdminDashboard() {
   const [removing, setRemoving] = useState<Person | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  async function signInAs(p: Person) {
+    if (!confirm(`Sign in as ${p.name}? You'll see TaskTrack exactly as they do, and anything you do counts as them. Use "Back to admin" at the top to return (or it ends after 1 hour).`)) return;
+    try {
+      await api("/api/admin/impersonate", { method: "POST", json: { userId: p._id } });
+      window.location.href = "/tracker";
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
   async function unblock(b: Overview["blocked"][number]) {
     if (!confirm(`Unblock ${b.name}? They'll be able to sign up and join the Telegram groups again.`)) return;
     try {
@@ -297,9 +307,16 @@ export default function AdminDashboard() {
                         <td className="px-3 py-2.5 text-right text-xs text-muted">{timeAgo(p.lastSeenAt)}</td>
                         <td className="px-4 py-2.5 text-right">
                           {p._id !== data.me && (
-                            <button className="rounded-md px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10" onClick={() => setRemoving(p)}>
-                              Delete
-                            </button>
+                            <div className="flex justify-end gap-1">
+                              {p.role !== "admin" && (
+                                <button className="rounded-md px-2 py-1 text-xs font-medium whitespace-nowrap text-accent hover:bg-accent-soft" onClick={() => signInAs(p)}>
+                                  Log in as
+                                </button>
+                              )}
+                              <button className="rounded-md px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10" onClick={() => setRemoving(p)}>
+                                Delete
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>

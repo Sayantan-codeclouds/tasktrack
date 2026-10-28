@@ -14,6 +14,8 @@ interface Props {
   /** Team Leads and Managers. */
   showTeam?: boolean;
   isAdmin?: boolean;
+  /** The admin is signed in as this person ("Admin view"). */
+  viewingAs?: boolean;
 }
 
 const LINKS = [
@@ -26,7 +28,7 @@ const LINKS = [
   { href: "/admin", label: "Overview", admin: true },
 ];
 
-export default function NavBar({ user, showReports = false, showTeam = false, isAdmin = false }: Props) {
+export default function NavBar({ user, showReports = false, showTeam = false, isAdmin = false, viewingAs = false }: Props) {
   const pathname = usePathname();
   const router = useRouter();
   const [presence, setPresence] = useState(user.presence);
@@ -65,6 +67,7 @@ export default function NavBar({ user, showReports = false, showTeam = false, is
 
   return (
     <header className="sticky top-0 z-30 border-b border-line/80 bg-surface/75 backdrop-blur-xl backdrop-saturate-150">
+      {viewingAs && <AdminViewBar name={user.name} />}
       <div className="mx-auto flex h-15 max-w-7xl items-center gap-4 px-4 sm:px-6">
         <Link href="/tracker" className="flex items-center gap-2.5 font-semibold tracking-tight">
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-linear-to-br from-accent to-accent-2 text-white shadow-md shadow-accent/30">
@@ -142,5 +145,33 @@ export default function NavBar({ user, showReports = false, showTeam = false, is
         </div>
       </div>
     </header>
+  );
+}
+
+/** Shown while the admin is signed in as someone else. */
+function AdminViewBar({ name }: { name: string }) {
+  const [busy, setBusy] = useState(false);
+  async function back() {
+    setBusy(true);
+    try {
+      await api("/api/admin/impersonate", { method: "DELETE" });
+      window.location.href = "/admin";
+    } catch {
+      // The admin view expired (1 hour) — sign in again.
+      window.location.href = "/login";
+    }
+  }
+  return (
+    <div className="bg-break text-white">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 text-sm sm:px-6">
+        <span aria-hidden>👁</span>
+        <span className="mr-auto">
+          <strong>Admin view</strong> — you&apos;re signed in as {name}. Anything you do counts as them. Ends after 1 hour.
+        </span>
+        <button onClick={back} disabled={busy} className="rounded-md bg-white/20 px-2.5 py-0.5 text-xs font-semibold hover:bg-white/30 disabled:opacity-60">
+          {busy ? "Returning…" : "Back to admin"}
+        </button>
+      </div>
+    </div>
   );
 }
