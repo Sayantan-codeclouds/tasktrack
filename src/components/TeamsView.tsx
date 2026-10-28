@@ -108,7 +108,7 @@ export default function TeamsView({ botUsername }: { botUsername: string | null 
           )}
         </div>
       ) : (
-        <div className="grid gap-5 xl:grid-cols-2">
+        <div className={`grid gap-5 ${data.teams.length > 1 ? "xl:grid-cols-2" : ""}`}>
           {data.teams.map((t) => (
             <TeamCard key={t._id} team={t} data={data} botUsername={botUsername} onChanged={refresh} />
           ))}
@@ -215,7 +215,7 @@ function TeamSetup({ t, data, busy, run }: { t: TeamRow; data: TeamsData; busy: 
   const patch = (key: string, json: Record<string, unknown>) => run(key, () => api(`/api/teams/${t._id}`, { method: "PATCH", json }));
 
   return (
-    <div className="mt-4 grid gap-3 rounded-xl bg-surface-2/60 p-3.5 text-sm sm:grid-cols-3">
+    <div className="mt-4 grid gap-3 rounded-xl bg-surface-2/60 p-3.5 text-sm @lg:grid-cols-2 @3xl:grid-cols-3">
       <div>
         <p className="label mb-1">Team Lead</p>
         {t.canChangeLead ? (
@@ -246,19 +246,19 @@ function TeamSetup({ t, data, busy, run }: { t: TeamRow; data: TeamsData; busy: 
           <p className="flex items-center gap-2 font-medium">{t.manager ? <><Avatar name={t.manager.name} id={t.manager._id} size={20} /> {t.manager.name}</> : <span className="text-muted">Not set</span>}</p>
         )}
       </div>
-      <div>
+      <div className="min-w-0 @lg:col-span-2 @3xl:col-span-1">
         <p className="label mb-1">Shift timings</p>
         {t.canManage ? (
           <form
-            className="flex items-center gap-1.5"
+            className="flex flex-wrap items-center gap-1.5"
             onSubmit={(e) => {
               e.preventDefault();
               patch("shift", { shiftStart: start || null, shiftEnd: end || null });
             }}
           >
-            <input type="time" className="input w-auto px-2 py-1.5 text-xs" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Shift start" />
+            <input type="time" className="input min-w-28 flex-1 px-2 py-1.5 text-xs" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Shift start" />
             <span className="text-muted">–</span>
-            <input type="time" className="input w-auto px-2 py-1.5 text-xs" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Shift end" />
+            <input type="time" className="input min-w-28 flex-1 px-2 py-1.5 text-xs" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Shift end" />
             {shiftDirty && (
               <button className="btn-primary px-2.5 py-1.5 text-xs" disabled={busy === "shift"}>
                 Save
@@ -310,7 +310,7 @@ function TeamCard({ team: t, data, botUsername, onChanged }: { team: TeamRow; da
   const linkCommand = t.linkCode ? `/link ${t.linkCode}` : "";
 
   return (
-    <article className="card overflow-hidden">
+    <article className="card @container overflow-hidden">
       <div className="h-1.5" style={{ background: t.color }} />
       <div className="p-5">
         {/* Header */}
@@ -343,7 +343,7 @@ function TeamCard({ team: t, data, botUsername, onChanged }: { team: TeamRow; da
               {t.members.length} member{t.members.length === 1 ? "" : "s"} · {t.open} open · {t.done} done
             </p>
           </div>
-          <div className="flex shrink-0 flex-col gap-1.5">
+          <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
             <Link href={`/tracker?team=${t._id}`} className="btn-ghost py-1.5 text-xs">
               Board →
             </Link>
@@ -366,7 +366,7 @@ function TeamCard({ team: t, data, botUsername, onChanged }: { team: TeamRow; da
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{t.telegramChatTitle ?? "Telegram group"}</p>
-                <p className="text-xs text-muted">Connected {timeAgo(t.telegramLinkedAt)} · members sync automatically</p>
+                <p className="truncate text-xs text-muted">Connected {timeAgo(t.telegramLinkedAt)} · members sync automatically</p>
                 {canManage ? (
                   <label className="mt-1.5 flex w-fit cursor-pointer items-center gap-2 text-xs">
                     <input
@@ -384,7 +384,7 @@ function TeamCard({ team: t, data, botUsername, onChanged }: { team: TeamRow; da
               </div>
               {canManage && (
                 <button
-                  className="text-xs text-muted hover:text-danger"
+                  className="shrink-0 self-start text-xs text-muted hover:text-danger"
                   disabled={busy === "unlink"}
                   onClick={() =>
                     confirm(`Disconnect “${t.telegramChatTitle}” from ${t.name}? The bot will stop reading that group.`) &&
