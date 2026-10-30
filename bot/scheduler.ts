@@ -106,7 +106,7 @@ export async function postScheduledReports(api: Api, now = new Date()) {
       try {
         const report = await buildTeamReport(String(t._id), job.period, ymd, { hideUserIds: await adminUserIds() });
         if (!report) continue;
-        const text = formatReportText(report);
+        const text = formatReportText(report, { attendance: false });
         if (t.telegramChatId) {
           await api.sendMessage(t.telegramChatId, text);
           // The full report as a file anyone in the group can download. The message is already out,

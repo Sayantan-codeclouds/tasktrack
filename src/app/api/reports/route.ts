@@ -13,5 +13,5 @@ export const GET = withUser(async (req, { user }) => {
   if (!p.ok) return p.error;
   const report = await buildTeamReport(p.team, p.period, p.date, { hideUserIds: await hiddenIdsFor(user) });
   if (!report) return jsonError("Team not found", 404);
-  return NextResponse.json({ report, text: formatReportText(report) });
+  return NextResponse.json({ report, text: formatReportText(report, { attendance: false }) });
 });

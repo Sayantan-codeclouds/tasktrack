@@ -20,7 +20,7 @@ export const POST = withUser(async (req, { user }) => {
   const report = await buildTeamReport(p.team, p.period, p.date, { hideUserIds: await adminUserIds() });
   if (!report) return jsonError("Team not found", 404);
   try {
-    await sendTelegramMessage(team.telegramChatId, user.role === "admin" ? formatReportText(report) : `${formatReportText(report)}\n\n— posted by ${user.name}`);
+    await sendTelegramMessage(team.telegramChatId, user.role === "admin" ? formatReportText(report, { attendance: false }) : `${formatReportText(report, { attendance: false })}\n\n— posted by ${user.name}`);
   } catch (err) {
     return jsonError(`Telegram: ${(err as Error).message}`, 502);
   }

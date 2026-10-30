@@ -527,7 +527,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const report = await buildTeamReport(String(scope.team._id), period, dayKey(new Date(), appTimeZone()), {
       hideUserIds: await adminUserIds(),
     });
-    if (report) await ctx.reply(formatReportText(report));
+    if (report) await ctx.reply(formatReportText(report, { attendance: false }));
     return null;
   }
   bot.command("report", async (ctx) => noteFor(ctx, await replyTeamReport(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));

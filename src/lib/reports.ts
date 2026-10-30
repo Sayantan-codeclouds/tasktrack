@@ -686,7 +686,7 @@ function list<T>(items: T[], line: (x: T) => string) {
   return shown.join("\n");
 }
 
-/** `attendance: false` for downloads — the work only; login, online, late and absent stay in the Telegram message. */
+/** `attendance: false` for downloads and group posts — the work only. Login, online, late and absent go only to the private copy for Team Leads and Managers. */
 export function formatReportText(r: TeamReport, opts: { attendance?: boolean } = {}): string {
   const att = opts.attendance !== false;
   const title =
