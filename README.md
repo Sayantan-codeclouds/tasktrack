@@ -94,7 +94,8 @@ cp .env.example .env.local   # then fill in the values
 | `ALLOW_REGISTRATION` | `false` closes sign-ups after the first account |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather |
 | `TELEGRAM_BOT_USERNAME` | Without `@`; shown as a link on the Profile page |
-| `GROQ_API_KEY` / `GROQ_MODEL` | Default model: `openai/gpt-oss-120b`. See which models your key can use at <https://console.groq.com/docs/models> |
+| `NVIDIA_API_KEY` / `NVIDIA_MODEL` | Optional. When set, the bot uses NVIDIA's API instead of Groq. Default model: `mistralai/mistral-large-4-1t-a52b` (Mistral Large 4). Keys and models: <https://build.nvidia.com> |
+| `GROQ_API_KEY` / `GROQ_MODEL` | Used when `NVIDIA_API_KEY` isn't set. Default model: `openai/gpt-oss-120b`. See which models your key can use at <https://console.groq.com/docs/models> |
 | `AI_MIN_CONFIDENCE` | Default `0.6` |
 | `ABSENT_AFTER_MINUTES` | Default `120`; `0` disables the absence check |
 | `APP_TIMEZONE` | Lets the AI resolve "tomorrow" or "Friday", and sets where a day starts and ends for reports, e.g. `Asia/Kolkata` |
@@ -223,7 +224,7 @@ The bot uses long polling, so it needs a process that stays running: a VPS with 
 ```
 bot/
   index.ts        Telegram bot: commands, account linking, AI message handling, auto-offline
-  ai.ts           Groq prompt + validated JSON output
+  ai.ts           AI prompt (NVIDIA or Groq) + validated JSON output
 src/lib/
   services.ts     All data changes + activity logging (shared by bot and web)
   models/         User, Task, ActivityLog
