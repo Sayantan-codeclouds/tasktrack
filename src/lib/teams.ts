@@ -59,6 +59,7 @@ export async function updateTeam(
     managerId?: Id | null;
     shiftStart?: string | null;
     shiftEnd?: string | null;
+    meetingUrl?: string | null;
   },
   ctx: ActivityContext,
 ) {
@@ -93,6 +94,10 @@ export async function updateTeam(
     team.shiftStart = start ?? null;
     team.shiftEnd = end ?? null;
     notes.push(start && end ? `set ${team.name}'s shift to ${start}–${end}` : `cleared ${team.name}'s shift timings`);
+  }
+  if (input.meetingUrl !== undefined && (input.meetingUrl || null) !== (team.meetingUrl ?? null)) {
+    team.meetingUrl = input.meetingUrl || null;
+    notes.push(input.meetingUrl ? `set ${team.name}'s meeting link to ${input.meetingUrl}` : `removed ${team.name}'s meeting link`);
   }
   if (!team.isModified()) return team;
   await team.save();

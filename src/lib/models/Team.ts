@@ -28,6 +28,8 @@ export interface ITeam {
   /** Shift timings, "HH:MM" in APP_TIMEZONE. EOD is posted at shiftEnd. */
   shiftStart?: string | null;
   shiftEnd?: string | null;
+  /** The team's permanent meeting link (Google Meet etc.), set by its Team Lead or Manager. */
+  meetingUrl?: string | null;
   members: ITeamMember[];
   pending: ITeamPending[];
   telegramChatId?: string | null;
@@ -58,6 +60,7 @@ const TeamSchema = new Schema<ITeam>(
     manager: { type: Schema.Types.ObjectId, ref: "User", default: null },
     shiftStart: { type: String, default: null },
     shiftEnd: { type: String, default: null },
+    meetingUrl: { type: String, default: null },
     members: [
       {
         _id: false,

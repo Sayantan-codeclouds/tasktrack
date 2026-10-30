@@ -31,7 +31,7 @@ export async function askContext(asker: IUser, groupTeamId: Types.ObjectId | nul
   const hidden = new Set(await adminUserIds());
 
   const teams = await Team.find(teamIds ? { _id: { $in: teamIds } } : {})
-    .select("name lead manager members.user shiftStart shiftEnd")
+    .select("name lead manager members.user shiftStart shiftEnd meetingUrl")
     .sort({ name: 1 })
     .lean();
   const peopleIds = [...new Set([String(asker._id), ...teams.flatMap((t) => [...t.members.map((m) => String(m.user)), ...[t.lead, t.manager].filter(Boolean).map(String)])])].filter(
@@ -86,6 +86,7 @@ export async function askContext(asker: IUser, groupTeamId: Types.ObjectId | nul
             t.lead ? `Team Lead ${who(t.lead)}` : null,
             t.manager ? `Manager ${who(t.manager)}` : null,
             `${t.members.length} members`,
+            t.meetingUrl ? `meeting link ${t.meetingUrl}` : null,
           ]
             .filter(Boolean)
             .join(" · "),

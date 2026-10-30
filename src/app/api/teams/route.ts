@@ -54,6 +54,7 @@ export const GET = withUser(async (_req, { user }) => {
       manager: t.manager && !hidden.has(String(t.manager._id)) ? { _id: String(t.manager._id), name: t.manager.name } : null,
       shiftStart: t.shiftStart ?? null,
       shiftEnd: t.shiftEnd ?? null,
+      meetingUrl: t.meetingUrl ?? null,
       telegramLinked: Boolean(t.telegramChatId),
       telegramChatTitle: t.telegramChatTitle,
       telegramLinkedAt: t.telegramLinkedAt,

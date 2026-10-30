@@ -25,6 +25,7 @@ interface TeamRow {
   manager: { _id: string; name: string } | null;
   shiftStart: string | null;
   shiftEnd: string | null;
+  meetingUrl: string | null;
   canManage: boolean;
   canChangeLead: boolean;
   canDelete: boolean;
@@ -209,6 +210,9 @@ function TeamSetup({ t, data, busy, run }: { t: TeamRow; data: TeamsData; busy: 
     setStart(t.shiftStart ?? "");
     setEnd(t.shiftEnd ?? "");
   }, [t.shiftStart, t.shiftEnd]);
+  const [meeting, setMeeting] = useState(t.meetingUrl ?? "");
+  useEffect(() => setMeeting(t.meetingUrl ?? ""), [t.meetingUrl]);
+  const meetingDirty = (meeting.trim() || null) !== t.meetingUrl;
   const isLead = t.lead?._id === data.me._id;
   const canSetManager = t.canManage && (data.me.isManager || isLead);
   const shiftDirty = (start || null) !== t.shiftStart || (end || null) !== t.shiftEnd;
@@ -269,6 +273,46 @@ function TeamSetup({ t, data, busy, run }: { t: TeamRow; data: TeamsData; busy: 
           <p className="font-medium">{t.shiftStart && t.shiftEnd ? `🕘 ${t.shiftStart}–${t.shiftEnd}` : <span className="text-muted">Not set</span>}</p>
         )}
         {t.shiftEnd && <p className="mt-1 text-[11px] text-muted">EOD posts at {t.shiftEnd}</p>}
+      </div>
+      <div className="min-w-0 @lg:col-span-2 @3xl:col-span-3">
+        <p className="label mb-1">Team meeting link</p>
+        {t.canManage ? (
+          <form
+            className="flex flex-wrap items-center gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              patch("meeting", { meetingUrl: meeting.trim() || null });
+            }}
+          >
+            <input
+              type="url"
+              inputMode="url"
+              className="input min-w-0 flex-1 basis-56 px-2 py-1.5 text-xs"
+              value={meeting}
+              onChange={(e) => setMeeting(e.target.value)}
+              placeholder="https://meet.google.com/abc-defg-hij"
+              aria-label="Team meeting link"
+            />
+            {meetingDirty ? (
+              <button className="btn-primary px-2.5 py-1.5 text-xs" disabled={busy === "meeting"}>
+                Save
+              </button>
+            ) : (
+              t.meetingUrl && (
+                <a href={t.meetingUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost px-2.5 py-1.5 text-xs">
+                  📹 Join
+                </a>
+              )
+            )}
+          </form>
+        ) : t.meetingUrl ? (
+          <a href={t.meetingUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">
+            📹 {t.meetingUrl.replace(/^https:\/\//, "")}
+          </a>
+        ) : (
+          <p className="text-muted">Not set</p>
+        )}
+        <p className="mt-1 text-[11px] text-muted">Everyone in the team gets a Meeting button at the top of the tracker, and /meet in Telegram.</p>
       </div>
     </div>
   );

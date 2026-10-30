@@ -16,6 +16,8 @@ interface Props {
   isAdmin?: boolean;
   /** The admin is signed in as this person ("Admin view"). */
   viewingAs?: boolean;
+  /** Their teams' meeting links. */
+  meetings?: { team: string; url: string }[];
 }
 
 const LINKS = [
@@ -28,7 +30,7 @@ const LINKS = [
   { href: "/admin", label: "Overview", admin: true },
 ];
 
-export default function NavBar({ user, showReports = false, showTeam = false, isAdmin = false, viewingAs = false }: Props) {
+export default function NavBar({ user, showReports = false, showTeam = false, isAdmin = false, viewingAs = false, meetings = [] }: Props) {
   const pathname = usePathname();
   const router = useRouter();
   const [presence, setPresence] = useState(user.presence);
@@ -95,6 +97,7 @@ export default function NavBar({ user, showReports = false, showTeam = false, is
         </nav>
 
         <div className="ml-auto flex items-center gap-2" ref={menuRef}>
+          <MeetingButton meetings={meetings} />
           {!user.telegramLinked && (
             <Link
               href="/profile"
@@ -145,6 +148,33 @@ export default function NavBar({ user, showReports = false, showTeam = false, is
         </div>
       </div>
     </header>
+  );
+}
+
+/** Opens the team's meeting. Someone in several teams with links picks one. */
+function MeetingButton({ meetings }: { meetings: { team: string; url: string }[] }) {
+  const cls = "inline-flex items-center gap-1.5 rounded-lg bg-online/15 px-2.5 py-1 text-xs font-medium text-online hover:bg-online/25";
+  if (!meetings.length) return null;
+  if (meetings.length === 1) {
+    return (
+      <a href={meetings[0].url} target="_blank" rel="noopener noreferrer" className={cls} title={`${meetings[0].team} meeting`}>
+        <span aria-hidden>📹</span> <span className="hidden sm:inline">Meeting</span>
+      </a>
+    );
+  }
+  return (
+    <details className="relative">
+      <summary className={`${cls} cursor-pointer list-none`}>
+        <span aria-hidden>📹</span> <span className="hidden sm:inline">Meetings</span>
+      </summary>
+      <div className="card absolute right-0 z-40 mt-2 w-48 overflow-hidden p-1 shadow-lg">
+        {meetings.map((m) => (
+          <a key={m.url + m.team} href={m.url} target="_blank" rel="noopener noreferrer" className="block truncate rounded-md px-3 py-2 text-sm hover:bg-surface-2">
+            {m.team}
+          </a>
+        ))}
+      </div>
+    </details>
   );
 }
 

@@ -33,7 +33,8 @@ const Ask = z.object({
   type: z.literal("ask"),
   question: z.string().min(2).max(500),
 });
-const Action = z.discriminatedUnion("type", [SetStatus, CreateTask, UpdateTask, EodNote, Ask]);
+const MeetingCall = z.object({ type: z.literal("meeting_call") });
+const Action = z.discriminatedUnion("type", [SetStatus, CreateTask, UpdateTask, EodNote, Ask, MeetingCall]);
 export type AiAction = z.infer<typeof Action>;
 
 export interface InterpretInput {
@@ -109,6 +110,11 @@ Action types:
    - NOT when it's asked of a specific teammate ("@ravi how's the banner going?", "Priya, are you done?") — they'll answer.
    - When the message is ADDRESSED TO THE BOT (see below), any question is for the tracker.
    - A message can be both a question and an update ("Login page done. What's left for me?") → both actions.
+
+6. {"type":"meeting_call"}
+   - The sender calls the team into the team's call / meeting now or soon ("@all please join our team call",
+     "everyone on the call in 5", "standup now", "let's hop on Meet", "team meeting, join"), or asks for the meeting link.
+   - The bot then posts the team's meeting link. NOT for other calls ("@ravi join my client call", "I'm in a meeting").
 
 Rules:
 - Casual chat, jokes, links, thanks, questions between teammates, and anything unclear → "actions": [] .

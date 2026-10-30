@@ -6,7 +6,7 @@ import { User } from "@/lib/models/User";
 import { deleteTeam, updateTeam } from "@/lib/teams";
 import { actorOf, loadManagedTeam } from "@/lib/teamApi";
 import { logActivity } from "@/lib/services";
-import { canBeTeamLead, canBeTeamManager, isHhmm, isManagerOrAbove } from "@/lib/constants";
+import { canBeTeamLead, canBeTeamManager, cleanMeetingUrl, isHhmm, isManagerOrAbove } from "@/lib/constants";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -19,6 +19,7 @@ const Body = z.object({
   managerId: z.string().refine(isValidObjectId, "Invalid Manager").nullable().optional(),
   shiftStart: Time,
   shiftEnd: Time,
+  meetingUrl: z.string().trim().max(300).nullable().optional(),
 });
 
 export const PATCH = withUser<Ctx>(async (req, { params, user }) => {
@@ -48,6 +49,8 @@ export const PATCH = withUser<Ctx>(async (req, { params, user }) => {
   const end = body.shiftEnd !== undefined ? body.shiftEnd : team.shiftEnd;
   if ((start && !end) || (!start && end)) return jsonError("Set both a shift start and end time", 400);
   if (start && end && start === end) return jsonError("Shift start and end can't be the same", 400);
+  const meetingUrl = body.meetingUrl ? cleanMeetingUrl(body.meetingUrl) : body.meetingUrl;
+  if (body.meetingUrl && !meetingUrl) return jsonError("That doesn't look like a meeting link — paste the full https:// link", 400);
 
   if (body.reportsEnabled !== undefined && body.reportsEnabled !== team.reportsEnabled) {
     team.reportsEnabled = body.reportsEnabled;
@@ -66,6 +69,7 @@ export const PATCH = withUser<Ctx>(async (req, { params, user }) => {
       managerId: body.managerId,
       shiftStart: body.shiftStart,
       shiftEnd: body.shiftEnd,
+      meetingUrl,
     },
     { source: "web", actorId: user._id },
   );

@@ -219,6 +219,10 @@ async function handleLeave(team: TeamDoc, person: TelegramPerson, how: string) {
 const SENT_PRIVATELY = "📩 Sent to you privately.";
 const NOT_LINKED = "NOT_LINKED";
 
+/** "join our team call", "team meeting now", "standup", "huddle", "meeting link" — calling the team in. */
+const MEETING_CALL =
+  /\b(join|hop on|come on|get on)\b.{0,15}\b(our|team)( team)? (call|meet|meeting)\b|\b(team call|team meeting|standup|stand-up|huddle) (now|in \d+)|\b(join|hop on).{0,15}\b(standup|stand-up|huddle)\b|@(all|everyone)\b.{0,30}\b(call|meeting|meet)\b|\b(team )?meeting link\b/i;
+
 const PRESENCE_MARK: Record<Presence, string> = { online: "🟢", break: "☕", offline: "🔴" };
 const APP_URL = process.env.APP_URL?.replace(/\/$/, "") || null;
 
@@ -240,6 +244,8 @@ function menuKeyboard() {
     .row()
     .text("📥 Everyone's EODs", "m:teameod")
     .text("📥 Everyone's EOWs", "m:teameow")
+    .row()
+    .text("📹 Team meeting", "m:meet")
     .row()
     .text("🔑 Forgot password", "m:forgot")
     .text("❓ All commands", "m:help");
@@ -275,6 +281,7 @@ Commands (if you want to be exact) — or send /menu for buttons:
 /new <title> — create a ticket for yourself
 /eod <text> — your end-of-day update (or just start a message with "EOD:")
 /ask <question> — ask about tickets, progress, who's on what
+/meet — the team's meeting link
 /report · /report week — this team's EOD / EOW summary
 /myeod · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
 /teameod · /teameod week — Team Leads and Managers: every person's EOD / EOW PDF, sent privately
@@ -334,6 +341,9 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
         break;
       case "forgot":
         note = await sendResetLink(ctx);
+        break;
+      case "meet":
+        note = await replyMeeting(ctx);
         break;
       case "help":
         await ctx.reply(HELP);
@@ -679,6 +689,53 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     await migrateChatId(ctx.chat.id, ctx.msg.migrate_to_chat_id);
   });
 
+  // /meet → the team's meeting link: this group's team, or in private the sender's teams.
+  async function replyMeeting(ctx: Context): Promise<string | null> {
+    const scope = await scopeOf(ctx);
+    if (!scope.ok) {
+      await warnNotConnected(ctx);
+      return null;
+    }
+    let teams: { name: string; meetingUrl?: string | null }[];
+    if (scope.team) teams = [scope.team];
+    else {
+      const user = await findSender(ctx);
+      if (!user) return NOT_LINKED;
+      teams = await Team.find({ _id: { $in: await teamIdsForUser(user._id) } }).select("name meetingUrl").sort({ name: 1 }).lean();
+    }
+    const withLink = teams.filter((t) => t.meetingUrl);
+    if (!withLink.length) {
+      await ctx.reply(
+        teams.length
+          ? `No meeting link set for ${teams.map((t) => t.name).join(", ")} yet. The Team Lead can add it on the tracker's Team page.`
+          : "You're not in a team yet.",
+      );
+      return null;
+    }
+    const kb = new InlineKeyboard();
+    withLink.forEach((t, i) => (i ? kb.row() : kb).url(withLink.length > 1 ? `📹 Join ${t.name}` : "📹 Join the meeting", t.meetingUrl!));
+    await ctx.reply(withLink.map((t) => `📹 ${t.name} meeting: ${t.meetingUrl}`).join("\n"), {
+      reply_markup: kb,
+      link_preview_options: { is_disabled: true },
+    });
+    return null;
+  }
+  bot.command("meet", async (ctx) => noteFor(ctx, await replyMeeting(ctx)));
+
+  // "@all please join our team call" → the team's meeting link, once per call (not again for a few minutes
+  // when others say "joining" or repeat it).
+  const lastCallPost = new Map<number, number>();
+  async function postMeetingLink(ctx: Context, team: TeamDoc) {
+    if (!team.meetingUrl || !ctx.chat || !ctx.msg) return;
+    if (Date.now() - (lastCallPost.get(ctx.chat.id) ?? 0) < 3 * 60_000) return;
+    lastCallPost.set(ctx.chat.id, Date.now());
+    await ctx.reply(`📹 ${team.name} team call — join here: ${team.meetingUrl}`, {
+      reply_parameters: { message_id: ctx.msg.message_id },
+      reply_markup: new InlineKeyboard().url("📹 Join the call", team.meetingUrl),
+      link_preview_options: { is_disabled: true },
+    });
+  }
+
   // ---------- questions → answers from the tracker ----------
 
   /** Answers a question about the work from what the asker may see: the group's team, or in private their teams. */
@@ -726,6 +783,8 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const scope = await scopeOf(ctx);
     if (!scope.ok) return; // unconnected group: stay quiet
     const team = scope.team;
+    // The usual ways of calling the team in: answered straight away, without waiting for the AI.
+    if (team && MEETING_CALL.test(text)) await postMeetingLink(ctx, team);
 
     const user = await findSender(ctx);
     if (!user) return warnNotLinked(ctx);
@@ -806,7 +865,8 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const questions = result.actions.flatMap((a) => (a.type === "ask" ? [a.question] : []));
     const answer = () =>
       questions.length && (addressed || result.confidence >= MIN_CONFIDENCE) ? replyAnswer(ctx, user, team, questions.join("\n")) : undefined;
-    const changes = result.actions.filter((a) => a.type !== "ask");
+    if (team && result.actions.some((a) => a.type === "meeting_call")) await postMeetingLink(ctx, team);
+    const changes = result.actions.filter((a) => a.type !== "ask" && a.type !== "meeting_call");
     if (!changes.length) return answer();
     if (result.confidence < MIN_CONFIDENCE) {
       await react(ctx, "🤔");
@@ -915,6 +975,7 @@ export const BOT_COMMANDS = [
   { command: "new", description: "Create a ticket for yourself" },
   { command: "eod", description: "Post your end-of-day update" },
   { command: "ask", description: "Ask about the work: /ask progress on Auxre?" },
+  { command: "meet", description: "The team's meeting link" },
   { command: "report", description: "Team EOD report (/report week for EOW)" },
   { command: "myeod", description: "Your EOD as a PDF (/myeod week for EOW)" },
   { command: "teameod", description: "Leads & Managers: everyone's EOD PDFs (/teameod week)" },

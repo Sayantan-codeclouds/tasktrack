@@ -91,6 +91,22 @@ export const canBeTeamManager = (p?: Position | null) => rankOf(p) >= POSITION_R
 /** "HH:MM" 24h. */
 export const isHhmm = (s: unknown): s is string => typeof s === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 
+/**
+ * A team's meeting link, cleaned up: any https link (Meet, Zoom, Teams…). Google Meet links become the
+ * standard https://meet.google.com/abc-defg-hij, whatever form they were pasted in. Null if it isn't a link.
+ */
+export function cleanMeetingUrl(raw: string): string | null {
+  const text = raw.trim();
+  const meet = /meet\.google\.com\/(?:[\w/-]*?\/)?([a-z]{3}-[a-z]{4}-[a-z]{3})\b/i.exec(text);
+  if (meet) return `https://meet.google.com/${meet[1].toLowerCase()}`;
+  try {
+    const url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    return url.protocol === "https:" && url.hostname.includes(".") ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Whether to show the Reports page at all. */
 export const canSeeReports = (u: Actor & { teamIds?: string[] }) =>
   isManagerOrAbove(u) || (rankOf(u.position) >= POSITION_RANK.team_lead && (u.teamIds ?? []).length > 0);
