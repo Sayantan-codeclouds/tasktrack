@@ -6,6 +6,7 @@ import { isBlocked } from "../src/lib/models/BlockedIdentity";
 import { Task } from "../src/lib/models/Task";
 import { Team, type ITeam } from "../src/lib/models/Team";
 import {
+  POSITION_GROUP,
   POSITION_LABEL,
   POSITION_RANK,
   PRESENCE_LABEL,
@@ -219,6 +220,29 @@ async function handleLeave(team: TeamDoc, person: TelegramPerson, how: string) {
 const SENT_PRIVATELY = "📩 Sent to you privately.";
 const NOT_LINKED = "NOT_LINKED";
 
+/** Tags that mean a group of the team's people: @all, @developers, @designers, @leads, @managers. */
+const GROUP_TAG_ROLES: Record<string, "all" | "development" | "design" | "lead" | "management"> = {
+  all: "all",
+  everyone: "all",
+  team: "all",
+  developers: "development",
+  developer: "development",
+  devs: "development",
+  dev: "development",
+  designers: "design",
+  designer: "design",
+  leads: "lead",
+  lead: "lead",
+  tl: "lead",
+  managers: "management",
+  manager: "management",
+  management: "management",
+};
+// Not inside an email address or a longer @name (@alliance).
+const GROUP_TAG = /(?<![\w@])@(all|everyone|team|developers|developer|devs|dev|designers|designer|leads|lead|tl|managers|manager|management)\b(?![.\w])/gi;
+
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 /** "join our team call", "team meeting now", "standup", "huddle", "meeting link" — calling the team in. */
 const MEETING_CALL =
   /\b(join|hop on|come on|get on)\b.{0,15}\b(our|team)( team)? (call|meet|meeting)\b|\b(team call|team meeting|standup|stand-up|huddle) (now|in \d+)|\b(join|hop on).{0,15}\b(standup|stand-up|huddle)\b|@(all|everyone)\b.{0,30}\b(call|meeting|meet)\b|\b(team )?meeting link\b/i;
@@ -269,6 +293,9 @@ Ask me about the work and I'll answer from the tracker:
 • "Who's working on the PrivateLabelNutra website?"
 • "What did we finish today?" · "What's blocked?" · "Who's online?"
 In a group I answer questions for the team (not ones you ask a teammate). @mention me or use /ask to be sure.
+
+Tag a group: @all, @developers, @designers, @leads or @managers and I'll tag each of those people so they're notified.
+"@all please join our team call" also gets the team's meeting link.
 
 Teams: each team has its own group. Add people to the group and they join the team on the tracker.
 
@@ -725,15 +752,56 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
   // "@all please join our team call" → the team's meeting link, once per call (not again for a few minutes
   // when others say "joining" or repeat it).
   const lastCallPost = new Map<number, number>();
-  async function postMeetingLink(ctx: Context, team: TeamDoc) {
-    if (!team.meetingUrl || !ctx.chat || !ctx.msg) return;
-    if (Date.now() - (lastCallPost.get(ctx.chat.id) ?? 0) < 3 * 60_000) return;
+  /** Posts the link, tagging `mentions` (if any) so they're notified. False if it wasn't posted. */
+  async function postMeetingLink(ctx: Context, team: TeamDoc, mentions: string[] = []) {
+    if (!team.meetingUrl || !ctx.chat || !ctx.msg) return false;
+    if (Date.now() - (lastCallPost.get(ctx.chat.id) ?? 0) < 3 * 60_000) return false;
     lastCallPost.set(ctx.chat.id, Date.now());
-    await ctx.reply(`📹 ${team.name} team call — join here: ${team.meetingUrl}`, {
+    const [first, ...rest] = mentionChunks(mentions);
+    await ctx.reply(`📹 <b>${escapeHtml(team.name)} team call</b> — join here: ${escapeHtml(team.meetingUrl)}${first ? `\n\n${first}` : ""}`, {
+      parse_mode: "HTML",
       reply_parameters: { message_id: ctx.msg.message_id },
       reply_markup: new InlineKeyboard().url("📹 Join the call", team.meetingUrl),
       link_preview_options: { is_disabled: true },
     });
+    for (const chunk of rest) await ctx.reply(chunk, { parse_mode: "HTML" });
+    return true;
+  }
+
+  // ---------- @all / @developers / @designers … → tag those people ----------
+
+  /**
+   * The people a message's group tags (@all, @developers, …) point to, as Telegram mentions: @username, or a
+   * tappable name for people without one (it notifies them the same way). Not the sender. Empty if no tags.
+   */
+  async function groupMentions(ctx: Context, team: TeamDoc, text: string): Promise<string[]> {
+    const tags = [...text.matchAll(GROUP_TAG)].map((m) => m[1].toLowerCase());
+    if (!tags.length) return [];
+    const everyone = tags.some((t) => GROUP_TAG_ROLES[t] === "all");
+    const groups = new Set(tags.map((t) => GROUP_TAG_ROLES[t]));
+    const people = await User.find({ _id: { $in: team.members.map((m) => m.user) }, telegramId: { $ne: null } })
+      .select("name position telegramId telegramUsername")
+      .sort({ name: 1 })
+      .lean();
+    const me = String(ctx.from?.id ?? "");
+    const mention = (p: { telegramId: string; telegramUsername?: string | null; name: string }) =>
+      p.telegramUsername ? `@${p.telegramUsername}` : `<a href="tg://user?id=${p.telegramId}">${escapeHtml(p.name)}</a>`;
+    const picked = people
+      .filter((p) => p.telegramId !== me && (everyone || (p.position && groups.has(POSITION_GROUP[p.position]))))
+      .map((p) => mention({ telegramId: p.telegramId!, telegramUsername: p.telegramUsername, name: p.name }));
+    // @all also reaches people in the group who haven't linked the tracker yet.
+    if (everyone) for (const p of team.pending ?? []) if (p.telegramId !== me) picked.push(mention({ telegramId: p.telegramId, telegramUsername: p.username, name: p.name }));
+    return picked;
+  }
+
+  /** Mentions as message lines, a few dozen per message so Telegram notifies them all. */
+  const mentionChunks = (mentions: string[]) => Array.from({ length: Math.ceil(mentions.length / 40) }, (_, i) => mentions.slice(i * 40, i * 40 + 40).join(" "));
+
+  async function tagPeople(ctx: Context, mentions: string[]) {
+    if (!mentions.length || !ctx.msg) return;
+    const [first, ...rest] = mentionChunks(mentions);
+    await ctx.reply(`📣 ${first}`, { parse_mode: "HTML", reply_parameters: { message_id: ctx.msg.message_id } });
+    for (const chunk of rest) await ctx.reply(chunk, { parse_mode: "HTML" });
   }
 
   // ---------- questions → answers from the tracker ----------
@@ -783,8 +851,15 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const scope = await scopeOf(ctx);
     if (!scope.ok) return; // unconnected group: stay quiet
     const team = scope.team;
-    // The usual ways of calling the team in: answered straight away, without waiting for the AI.
-    if (team && MEETING_CALL.test(text)) await postMeetingLink(ctx, team);
+    // @all / @developers … → tag those people. The usual ways of calling the team in get the meeting link
+    // (with the tags) straight away, without waiting for the AI.
+    const mentions = team ? await groupMentions(ctx, team, text) : [];
+    let tagged = false;
+    if (team && MEETING_CALL.test(text)) tagged = await postMeetingLink(ctx, team, mentions);
+    if (!tagged && mentions.length) {
+      await tagPeople(ctx, mentions);
+      tagged = true;
+    }
 
     const user = await findSender(ctx);
     if (!user) return warnNotLinked(ctx);
@@ -865,7 +940,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const questions = result.actions.flatMap((a) => (a.type === "ask" ? [a.question] : []));
     const answer = () =>
       questions.length && (addressed || result.confidence >= MIN_CONFIDENCE) ? replyAnswer(ctx, user, team, questions.join("\n")) : undefined;
-    if (team && result.actions.some((a) => a.type === "meeting_call")) await postMeetingLink(ctx, team);
+    if (team && result.actions.some((a) => a.type === "meeting_call")) await postMeetingLink(ctx, team, tagged ? [] : mentions);
     const changes = result.actions.filter((a) => a.type !== "ask" && a.type !== "meeting_call");
     if (!changes.length) return answer();
     if (result.confidence < MIN_CONFIDENCE) {
