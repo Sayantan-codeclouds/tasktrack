@@ -111,43 +111,6 @@ function groq() {
   return client;
 }
 
-/**
- * NVIDIA's API (build.nvidia.com), used instead of Groq when NVIDIA_API_KEY is set. Default model:
- * Mistral Large 4. It's OpenAI-compatible; a big model, so it gets longer than Groq to answer.
- */
-async function nvidia(messages: { role: "system" | "user"; content: string }[]): Promise<string> {
-  const body = JSON.stringify({
-    model: process.env.NVIDIA_MODEL || "mistralai/mistral-large-4-1t-a52b",
-    temperature: 0,
-    max_tokens: 2048,
-    response_format: { type: "json_object" },
-    messages,
-  });
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`, "Content-Type": "application/json", Accept: "application/json" },
-      body,
-      signal: AbortSignal.timeout(60_000),
-    });
-    // Busy or rate-limited: retry twice, like the Groq client does.
-    if ((res.status === 429 || res.status >= 500) && attempt < 2) {
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-      continue;
-    }
-    if (!res.ok) throw new Error(`NVIDIA API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
-    return data.choices?.[0]?.message?.content ?? "{}";
-  }
-}
-
-/** The JSON object in a reply, in case the model wraps it in ```json fences or a sentence. */
-function jsonOf(raw: string) {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  return start >= 0 && end > start ? raw.slice(start, end + 1) : raw;
-}
-
 export async function interpretMessage(input: InterpretInput): Promise<InterpretResult> {
   const today = new Intl.DateTimeFormat("en-CA", {
     timeZone: input.timeZone,
@@ -193,24 +156,20 @@ export async function interpretMessage(input: InterpretInput): Promise<Interpret
     .filter(Boolean)
     .join("\n\n");
 
-  const messages = [
-    { role: "system" as const, content: SYSTEM_PROMPT },
-    { role: "user" as const, content: context },
-  ];
-  const raw = process.env.NVIDIA_API_KEY
-    ? await nvidia(messages)
-    : ((
-        await groq().chat.completions.create({
-          model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
-          temperature: 0,
-          response_format: { type: "json_object" },
-          messages,
-        })
-      ).choices[0]?.message?.content ?? "{}");
+  const completion = await groq().chat.completions.create({
+    model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: context },
+    ],
+  });
 
+  const raw = completion.choices[0]?.message?.content ?? "{}";
   let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(jsonOf(raw));
+    parsed = JSON.parse(raw);
   } catch {
     return { actions: [], confidence: 0, reason: "Model returned invalid JSON" };
   }
