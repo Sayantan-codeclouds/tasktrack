@@ -29,7 +29,11 @@ const EodNote = z.object({
   type: z.literal("eod_note"),
   text: z.string().min(2).max(1000),
 });
-const Action = z.discriminatedUnion("type", [SetStatus, CreateTask, UpdateTask, EodNote]);
+const Ask = z.object({
+  type: z.literal("ask"),
+  question: z.string().min(2).max(500),
+});
+const Action = z.discriminatedUnion("type", [SetStatus, CreateTask, UpdateTask, EodNote, Ask]);
 export type AiAction = z.infer<typeof Action>;
 
 export interface InterpretInput {
@@ -42,6 +46,8 @@ export interface InterpretInput {
   /** The task the message is replying to, if any. */
   replyToTaskRef?: string | null;
   replyToText?: string | null;
+  /** A private chat with the bot, an @mention of it, or a reply to one of its messages. */
+  addressedToBot?: boolean;
   now: Date;
   timeZone: string;
 }
@@ -95,8 +101,17 @@ Action types:
    - text: their report, lightly cleaned (keep their wording and ticket keys, drop greetings). Max ~500 characters.
    - Usually combine it with update_task actions for any tickets it clearly mentions, and set_status offline if they're signing off.
 
+5. {"type":"ask","question":string}
+   - A question the tracker can answer: progress or status of a ticket, project or website ("what's the progress on Auxre?",
+     "is the PrivateLabelNutra site live?"), who is working on what, what's open / done / blocked / due, who is online,
+     what someone or the team did today or this week, how to use the tracker or this bot.
+   - question: the question, self-contained (resolve "it" / "that" from the replied-to message).
+   - NOT when it's asked of a specific teammate ("@ravi how's the banner going?", "Priya, are you done?") — they'll answer.
+   - When the message is ADDRESSED TO THE BOT (see below), any question is for the tracker.
+   - A message can be both a question and an update ("Login page done. What's left for me?") → both actions.
+
 Rules:
-- Casual chat, questions, jokes, links, thanks, and anything unclear → "actions": [] .
+- Casual chat, jokes, links, thanks, questions between teammates, and anything unclear → "actions": [] .
 - Never invent task refs or member refs. Never create a task that already exists in TASKS — update it instead.
 - One message can produce several actions (e.g. "Finished login, going for lunch" → update_task done + set_status break).
 - Lower your confidence when you are guessing which task is meant.`;
@@ -151,6 +166,7 @@ export async function interpretMessage(input: InterpretInput): Promise<Interpret
       .join("\n")}`,
     input.replyToTaskRef ? `The message is a REPLY about task ${input.replyToTaskRef}.` : null,
     input.replyToText ? `It replies to this message: "${input.replyToText.slice(0, 300)}"` : null,
+    input.addressedToBot ? "The message is ADDRESSED TO THE BOT (private chat, @mention or a reply to the bot)." : null,
     `MESSAGE:\n${input.text}`,
   ]
     .filter(Boolean)
@@ -182,4 +198,53 @@ export async function interpretMessage(input: InterpretInput): Promise<Interpret
 
   const confidence = typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
   return { actions, confidence, reason: typeof parsed.reason === "string" ? parsed.reason : "" };
+}
+
+export interface AnswerInput {
+  question: string;
+  asker: { name: string; role: string | null };
+  /** What the asker can see, as text: teams, people, tickets, recent updates (see bot/ask.ts). */
+  data: string;
+  now: Date;
+  timeZone: string;
+}
+
+const ANSWER_PROMPT = `You are the team's task-tracker assistant in Telegram. Answer the question from the TRACKER DATA only.
+- Be short and direct: a sentence or a few bullet lines ("• "). Plain text — no Markdown, no tables, no headings.
+- Name tickets by key and title ("TT-12 Redesign the PrivateLabelNutra.com Website") and people by name.
+- For progress, give status, percent, who's on it and the latest update with its time if there is one.
+- Match loosely: "Auxre" means tickets with Auxre in the title; a website name matches tickets about that site.
+- If several tickets match, list them. If nothing matches, say so plainly and don't guess.
+- Never make up tickets, people, numbers or dates. If the data doesn't say, say you don't know.
+- Questions about using the tracker: answer from the HOW TO USE section if there is one.
+- Today is given; say "today", "yesterday" or the day name rather than full dates where it reads better.`;
+
+/** A plain-text answer to a question about the tracker, from the data the asker may see. */
+export async function answerQuestion(input: AnswerInput): Promise<string> {
+  const today = new Intl.DateTimeFormat("en-GB", {
+    timeZone: input.timeZone,
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(input.now);
+  // A different model from the one reading messages: each model has its own rate limit on Groq, so
+  // questions never hold up status and ticket updates.
+  const completion = await groq().chat.completions.create({
+    model: process.env.GROQ_ANSWER_MODEL || "openai/gpt-oss-20b",
+    temperature: 0.2,
+    reasoning_effort: "low",
+    max_completion_tokens: 2000,
+    messages: [
+      { role: "system", content: ANSWER_PROMPT },
+      {
+        role: "user",
+        content: `NOW: ${today} (${input.timeZone})\nASKED BY: ${input.asker.name}${input.asker.role ? ` (${input.asker.role})` : ""}\n\n${input.data}\n\nQUESTION: ${input.question}`,
+      },
+    ],
+  });
+  return (completion.choices[0]?.message?.content ?? "").trim();
 }

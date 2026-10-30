@@ -35,7 +35,8 @@ import {
   unlinkTeamChat,
   type TelegramPerson,
 } from "../src/lib/teams";
-import { interpretMessage } from "./ai";
+import { answerQuestion, interpretMessage } from "./ai";
+import { askContext } from "./ask";
 import { createResetLink } from "../src/lib/passwordReset";
 import { buildTeamPack, sendTeamPack } from "./scheduler";
 import { overseenTeams } from "../src/lib/oversight";
@@ -257,6 +258,12 @@ Just talk normally — I'll understand things like:
 • "@ravi please build the payment API by Friday" → New ticket for Ravi
 • "Finished the dashboard, logging off" → Done + Offline
 
+Ask me about the work and I'll answer from the tracker:
+• "What's the progress on Auxre?"
+• "Who's working on the PrivateLabelNutra website?"
+• "What did we finish today?" · "What's blocked?" · "Who's online?"
+In a group I answer questions for the team (not ones you ask a teammate). @mention me or use /ask to be sure.
+
 Teams: each team has its own group. Add people to the group and they join the team on the tracker.
 
 Commands (if you want to be exact) — or send /menu for buttons:
@@ -267,6 +274,7 @@ Commands (if you want to be exact) — or send /menu for buttons:
 /done <#> — mark a ticket done
 /new <title> — create a ticket for yourself
 /eod <text> — your end-of-day update (or just start a message with "EOD:")
+/ask <question> — ask about tickets, progress, who's on what
 /report · /report week — this team's EOD / EOW summary
 /myeod · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
 /teameod · /teameod week — Team Leads and Managers: every person's EOD / EOW PDF, sent privately
@@ -671,6 +679,44 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     await migrateChatId(ctx.chat.id, ctx.msg.migrate_to_chat_id);
   });
 
+  // ---------- questions → answers from the tracker ----------
+
+  /** Answers a question about the work from what the asker may see: the group's team, or in private their teams. */
+  async function replyAnswer(ctx: Context, user: UserDoc, team: TeamDoc | null, question: string) {
+    await ctx.replyWithChatAction("typing").catch(() => {});
+    let answer: string;
+    try {
+      // The help text only for questions about using the bot, to keep the request small.
+      const howTo = /\b(how|help|command|use|link|password|menu|bot)\b/i.test(question) ? HELP : null;
+      const data = await askContext(user, team?._id ?? null, howTo, TIME_ZONE);
+      answer = await answerQuestion({
+        question,
+        asker: { name: user.name, role: user.position ? POSITION_LABEL[user.position] : null },
+        data,
+        now: new Date(),
+        timeZone: TIME_ZONE,
+      });
+    } catch (err) {
+      console.error("[ask] failed:", err);
+      answer = "";
+    }
+    console.log(`[ask] ${team ? `[${team.name}] ` : ""}${user.name}: "${question.slice(0, 80)}" → ${answer.length} chars`);
+    // Telegram's limit is 4096 characters.
+    const text = answer ? (answer.length > 4000 ? `${answer.slice(0, 4000)}…` : answer) : "Sorry, I couldn't answer that just now. Try again in a minute.";
+    await ctx.reply(text, ctx.msg ? { reply_parameters: { message_id: ctx.msg.message_id } } : undefined);
+  }
+
+  // /ask <question> → always answered.
+  bot.command("ask", async (ctx) => {
+    const question = argsOf(ctx);
+    if (!question) return ctx.reply("Ask me about the work, e.g. /ask what's the progress on Auxre?");
+    const scope = await scopeOf(ctx);
+    if (!scope.ok) return warnNotConnected(ctx);
+    const user = await findSender(ctx);
+    if (!user) return warnNotLinked(ctx);
+    await replyAnswer(ctx, user, scope.team, question);
+  });
+
   // ---------- free text → AI ----------
 
   bot.on("message:text", async (ctx) => {
@@ -703,6 +749,11 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     ]);
 
     const reply = ctx.msg.reply_to_message;
+    // Talking to the bot: a private chat, an @mention, or a reply to one of its messages.
+    const addressed =
+      ctx.chat.type === "private" ||
+      (!!ctx.me.username && text.toLowerCase().includes(`@${ctx.me.username.toLowerCase()}`)) ||
+      reply?.from?.id === ctx.me.id;
     let replyTask = null;
     if (reply) {
       replyTask = await Task.findOne({
@@ -739,6 +790,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
         })),
         replyToTaskRef: replyTask ? taskRefs.find((r) => String(r.task._id) === String(replyTask._id))?.ref : null,
         replyToText: reply && "text" in reply ? (reply.text ?? null) : null,
+        addressedToBot: addressed,
         now: new Date(),
         timeZone: TIME_ZONE,
       });
@@ -750,10 +802,15 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     console.log(
       `[ai] ${team ? `[${team.name}] ` : ""}${user.name}: "${text.slice(0, 80)}" → ${JSON.stringify(result.actions)} (conf ${result.confidence}) ${result.reason}`,
     );
-    if (!result.actions.length) return;
+    // Questions are answered last, so an update in the same message is already in the answer.
+    const questions = result.actions.flatMap((a) => (a.type === "ask" ? [a.question] : []));
+    const answer = () =>
+      questions.length && (addressed || result.confidence >= MIN_CONFIDENCE) ? replyAnswer(ctx, user, team, questions.join("\n")) : undefined;
+    const changes = result.actions.filter((a) => a.type !== "ask");
+    if (!changes.length) return answer();
     if (result.confidence < MIN_CONFIDENCE) {
       await react(ctx, "🤔");
-      return;
+      return answer();
     }
 
     const teamId = await teamIdFor(scope, user._id);
@@ -767,7 +824,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const replies: string[] = [];
     let applied = 0;
 
-    for (const action of result.actions) {
+    for (const action of changes) {
       try {
         if (action.type === "set_status") {
           if (await setPresence(user._id, action.status, action.note ?? null, actx)) applied++;
@@ -836,10 +893,11 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     }
 
     // EOD notes already got ✍ — only add 👍 when something else changed too.
-    if (applied && !result.actions.every((a) => a.type === "eod_note")) await react(ctx, "👍");
+    if (applied && !changes.every((a) => a.type === "eod_note")) await react(ctx, "👍");
     if (replies.length) {
       await ctx.reply(replies.join("\n"), { reply_parameters: { message_id: ctx.msg.message_id } });
     }
+    await answer();
   });
 
   bot.catch((err) => console.error("[bot] error:", err.error));
@@ -856,6 +914,7 @@ export const BOT_COMMANDS = [
   { command: "done", description: "Mark a ticket done: /done 2" },
   { command: "new", description: "Create a ticket for yourself" },
   { command: "eod", description: "Post your end-of-day update" },
+  { command: "ask", description: "Ask about the work: /ask progress on Auxre?" },
   { command: "report", description: "Team EOD report (/report week for EOW)" },
   { command: "myeod", description: "Your EOD as a PDF (/myeod week for EOW)" },
   { command: "teameod", description: "Leads & Managers: everyone's EOD PDFs (/teameod week)" },

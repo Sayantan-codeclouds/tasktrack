@@ -56,7 +56,8 @@ Telegram group ──► bot (npm run bot) ──► Groq: "what does this messa
 ```
 
 - [`bot/index.ts`](bot/index.ts) reads every message from linked users. Context goes to the AI with each message: the sender's current status, their open tasks, tasks they've assigned to others, the team list, and the task being replied to.
-- [`bot/ai.ts`](bot/ai.ts) asks Groq for strict JSON with these actions: `set_status`, `update_task` and `create_task`, plus a confidence score. Actions below `AI_MIN_CONFIDENCE` are skipped, and the bot reacts 🤔.
+- [`bot/ai.ts`](bot/ai.ts) asks Groq for strict JSON with these actions: `set_status`, `update_task`, `create_task`, `eod_note` and `ask`, plus a confidence score. Actions below `AI_MIN_CONFIDENCE` are skipped, and the bot reacts 🤔.
+- **Questions:** "What's the progress on Auxre?", "Who's working on the PrivateLabelNutra website?", "What's blocked?" — the bot answers from the tracker ([`bot/ask.ts`](bot/ask.ts) gathers the tickets, people and the last 2 days of updates). In a group it answers about that team, and not questions asked of a teammate. In a private chat it answers about your teams (a Manager's or Team Lead's: the ones they oversee). `/ask <question>`, an @mention or a reply to the bot always gets an answer.
 - [`src/lib/services.ts`](src/lib/services.ts) is the only place data changes. The bot and the web app both call it, so every change writes an activity log entry. Entries from Telegram also store the original message and the AI's confidence.
 - **Replying to a task message:** replies to the original task message, or to the bot's 🆕 confirmation, are tied to that task, so "done ✅" as a reply works.
 - **Absent:** anyone not online `ABSENT_AFTER_MINUTES` (default 120) after their team's shift starts is absent that day. Their Team Lead and Manager get a private message, and reports show it.
@@ -95,6 +96,7 @@ cp .env.example .env.local   # then fill in the values
 | `TELEGRAM_BOT_TOKEN` | From @BotFather |
 | `TELEGRAM_BOT_USERNAME` | Without `@`; shown as a link on the Profile page |
 | `GROQ_API_KEY` / `GROQ_MODEL` | Default model: `openai/gpt-oss-120b`. See which models your key can use at <https://console.groq.com/docs/models> |
+| `GROQ_ANSWER_MODEL` | Answers questions asked in Telegram. Default `openai/gpt-oss-20b`: a different model from `GROQ_MODEL`, because each model has its own rate limit, so questions never slow down updates |
 | `AI_MIN_CONFIDENCE` | Default `0.6` |
 | `ABSENT_AFTER_MINUTES` | Default `120`; `0` disables the absence check |
 | `APP_TIMEZONE` | Lets the AI resolve "tomorrow" or "Friday", and sets where a day starts and ends for reports, e.g. `Asia/Kolkata` |
