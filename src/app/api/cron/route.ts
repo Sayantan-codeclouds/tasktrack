@@ -41,6 +41,13 @@ export async function GET(req: Request) {
         result.webhook = "registered";
       } else {
         result.webhook = info.last_error_message ? `ok (last error: ${info.last_error_message})` : "ok";
+        // New commands (e.g. /ask, /meet) show in Telegram's "/" list after a deploy, not only when the webhook changes.
+        const live = await bot.api.getMyCommands();
+        const same = live.length === BOT_COMMANDS.length && BOT_COMMANDS.every((c, i) => live[i]?.command === c.command && live[i]?.description === c.description);
+        if (!same) {
+          await bot.api.setMyCommands(BOT_COMMANDS);
+          result.commands = "updated";
+        }
       }
     } catch (err) {
       result.webhook = `error: ${(err as Error).message}`;
