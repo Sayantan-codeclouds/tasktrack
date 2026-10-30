@@ -1,29 +1,33 @@
 import "server-only";
 import { isValidObjectId, Types } from "mongoose";
-import { POSITIONS, POSITION_RANK, isManagerOrAbove, rankOf } from "./constants";
+import { POSITIONS, POSITION_RANK, isManagerOrAbove, rankOf, type Position } from "./constants";
+import { Team } from "./models/Team";
+import { overseenTeamIds } from "./oversight";
 import { User, type IUser } from "./models/User";
 import { hiddenIdsFor } from "./admin";
 
 /**
- * Whose EOD / EOW a viewer may open (read-only unless it's their own):
- * themselves; Managers and the admin — anyone; Team Leads — every employee below Manager.
+ * Whose EOD / EOW a viewer may open (read-only unless it's their own): themselves, plus the people in
+ * the teams they oversee (see overseenTeamIds). Senior Managers and the admin: everyone. Managers: their
+ * teams. Team Leads: their one team, below Manager.
  */
 export async function eodPeopleFor(viewer: IUser) {
   const me = { _id: String(viewer._id), role: viewer.role, position: viewer.position ?? null };
-  const hidden = await hiddenIdsFor(viewer);
-  let filter: Record<string, unknown> | null = null;
-  if (isManagerOrAbove(me)) {
-    filter = { _id: { $nin: hidden.map((id) => new Types.ObjectId(id)) } };
-  } else if (rankOf(me.position) >= POSITION_RANK.team_lead) {
-    // Every employee, in any team — but not Managers and above.
-    filter = {
-      _id: { $nin: hidden.map((id) => new Types.ObjectId(id)) },
-      position: { $nin: POSITIONS.filter((p) => POSITION_RANK[p] > POSITION_RANK.team_lead) },
-    };
+  const lead = isManagerOrAbove(me) || rankOf(me.position) >= POSITION_RANK.team_lead;
+  const teamIds = lead ? await overseenTeamIds(me) : [];
+  let others: { _id: Types.ObjectId; name: string; position?: Position | null }[] = [];
+  if (!teamIds || teamIds.length) {
+    const hidden = (await hiddenIdsFor(viewer)).map((id) => new Types.ObjectId(id));
+    const filter: Record<string, unknown> = { _id: { $nin: hidden, $ne: viewer._id } };
+    if (teamIds) {
+      const teams = await Team.find({ _id: { $in: teamIds } }).select("lead members.user").lean();
+      const ids = teams.flatMap((t) => [...t.members.map((m) => String(m.user)), ...(t.lead ? [String(t.lead)] : [])]);
+      filter.$and = [{ _id: { $in: [...new Set(ids)].map((id) => new Types.ObjectId(id)) } }];
+    }
+    // Team Leads don't see their Managers' EODs.
+    if (!isManagerOrAbove(me)) filter.position = { $nin: POSITIONS.filter((p) => POSITION_RANK[p] > POSITION_RANK.team_lead) };
+    others = await User.find(filter).select("name position").sort({ name: 1 }).lean();
   }
-  const others = filter
-    ? await User.find({ ...filter, _id: { ...(filter._id as object), $ne: viewer._id } }).select("name position").sort({ name: 1 }).lean()
-    : [];
   return [
     { _id: me._id, name: viewer.name, position: viewer.position ?? null, me: true },
     ...others.map((u) => ({ _id: String(u._id), name: u.name, position: u.position ?? null, me: false })),

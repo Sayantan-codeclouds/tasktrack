@@ -4,7 +4,7 @@ import { ReportDoc, type IEodContent, type IEodTaskRow } from "./models/ReportDo
 import { ReportDownload } from "./models/ReportDownload";
 import { POSITION_GROUP, TASK_STATUS, TASK_STATUS_LABEL, ticketKey } from "./constants";
 import { User } from "./models/User";
-import { Team } from "./models/Team";
+import { overseenTeams } from "./oversight";
 import { Task } from "./models/Task";
 import { adminUserIds } from "./admin";
 import { buildPersonReport, type PersonDay, type PersonReport } from "./personReport";
@@ -140,20 +140,8 @@ async function overseerDraft(userId: string, period: Period, date: string): Prom
   const me = await User.findById(userId).select("position").lean();
   const group = me?.position ? POSITION_GROUP[me.position] : null;
   if (group !== "management" && group !== "lead") return null;
-  const uid = new Types.ObjectId(userId);
-  let teams;
-  if (group === "lead") {
-    // The team they lead, else the team they're in.
-    const team =
-      (await Team.findOne({ lead: uid }).select("_id name").sort({ createdAt: 1 }).lean()) ??
-      (await Team.findOne({ "members.user": uid }).select("_id name").sort({ createdAt: 1 }).lean());
-    if (!team) return null;
-    teams = [team];
-  } else {
-    // The teams they manage or are in; a Manager with no team oversees them all.
-    teams = await Team.find({ $or: [{ manager: uid }, { "members.user": uid }] }).select("_id name").sort({ name: 1 }).lean();
-    if (!teams.length) teams = await Team.find().select("_id name").sort({ name: 1 }).lean();
-  }
+  const teams = await overseenTeams({ _id: userId, position: me!.position });
+  if (!teams.length) return null;
   const hide = await adminUserIds();
 
   const tasks: EodTaskRow[] = [];

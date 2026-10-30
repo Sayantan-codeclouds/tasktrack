@@ -38,6 +38,7 @@ import {
 import { interpretMessage } from "./ai";
 import { createResetLink } from "../src/lib/passwordReset";
 import { buildTeamPack, sendTeamPack } from "./scheduler";
+import { overseenTeams } from "../src/lib/oversight";
 
 const MIN_CONFIDENCE = Number(process.env.AI_MIN_CONFIDENCE ?? 0.6);
 const TIME_ZONE = process.env.APP_TIMEZONE || "UTC";
@@ -594,10 +595,8 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     if (!user) return NOT_LINKED;
     const me = { _id: String(user._id), role: user.role, position: user.position ?? null };
     if (!isManagerOrAbove(me) && rankOf(me.position) < POSITION_RANK.team_lead) return "Only Team Leads and Managers can get everyone's EODs. Use /myeod for your own.";
-    const teams = await Team.find(isManagerOrAbove(me) ? {} : { $or: [{ lead: user._id }, { "members.user": user._id }] })
-      .select("_id name")
-      .sort({ name: 1 })
-      .lean();
+    // A Manager's teams, or a Team Lead's one team.
+    const teams = await overseenTeams(me);
     if (!teams.length) return "You're not in any team yet.";
     const date = dayKey(new Date(), appTimeZone());
     const hide = await adminUserIds();

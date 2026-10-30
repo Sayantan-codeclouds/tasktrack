@@ -19,6 +19,7 @@ import { renderTeamReportPdf } from "../src/lib/teamReportPdf";
 import { buildEodPage, eodFileName } from "../src/lib/eod";
 import { renderEodPdf } from "../src/lib/eodPdf";
 import { adminUserIds } from "../src/lib/admin";
+import { overseenTeamIds } from "../src/lib/oversight";
 
 /** Default EOD time for teams without a shift end; EOW goes out at the same time on REPORT_EOW_DAY. */
 const EOD_TIME = /^\d{2}:\d{2}$/.test(process.env.REPORT_EOD_TIME ?? "") ? process.env.REPORT_EOD_TIME! : "19:00";
@@ -28,15 +29,19 @@ const WORK_DAYS = reportWorkDays();
 /** How long before the EOD to remind people who haven't done theirs. 0 turns it off. */
 const EOD_REMINDER_MINUTES = Number(process.env.REPORT_EOD_REMINDER_MINUTES ?? 30);
 
-/** Managers and above (not the admin) with Telegram linked: they get every team's EOD / EOW privately. */
-async function managersOnTelegram() {
-  return User.find({
+/**
+ * Team Leads and above (not the admin) with Telegram linked, and the teams each one oversees (null = all).
+ * Each gets the EOD / EOW of their own teams privately.
+ */
+async function overseersOnTelegram() {
+  const people = await User.find({
     role: { $ne: "admin" },
-    position: { $in: POSITIONS.filter((p) => POSITION_RANK[p] >= POSITION_RANK.manager) },
+    position: { $in: POSITIONS.filter((p) => POSITION_RANK[p] >= POSITION_RANK.team_lead) },
     telegramId: { $ne: null },
   })
-    .select("name telegramId")
+    .select("name telegramId role position")
     .lean();
+  return Promise.all(people.map(async (p) => ({ name: p.name, telegramId: p.telegramId!, teamIds: await overseenTeamIds(p) })));
 }
 
 /** A team's EOD / EOW for a Manager or Team Lead: the summary, the team PDF, and each person's own EOD PDF. */
@@ -74,7 +79,7 @@ export async function sendTeamPack(api: Api, chatId: number | string, pack: Team
 
 /**
  * Called every minute. Once it's past a team's EOD time on a workday, posts its EOD (and EOW on EOW_DAY)
- * exactly once — into the team's group if it has one, and privately to every Manager — the claim on
+ * exactly once — into the team's group if it has one, and privately to its Manager(s) and Team Lead — the claim on
  * lastEodPostedFor/lastEowPostedFor makes it safe across restarts and if two bot processes ever run.
  */
 export async function postScheduledReports(api: Api, now = new Date()) {
@@ -83,11 +88,11 @@ export async function postScheduledReports(api: Api, now = new Date()) {
   if (!WORK_DAYS.includes(weekday)) return [];
   const posted: string[] = [];
 
-  // Every team — Managers get the ones without a Telegram group too.
+  // Every team — the private copies go out for teams without a Telegram group too.
   const teams = await Team.find({ reportsEnabled: { $ne: false } })
     .select("_id name telegramChatId shiftEnd")
     .lean();
-  let managers: Awaited<ReturnType<typeof managersOnTelegram>> | null = null;
+  let overseers: Awaited<ReturnType<typeof overseersOnTelegram>> | null = null;
   for (const t of teams) {
     // Each team's EOD goes out when its shift ends (default REPORT_EOD_TIME).
     if (hhmm < (isHhmm(t.shiftEnd) ? t.shiftEnd : EOD_TIME)) continue;
@@ -112,12 +117,13 @@ export async function postScheduledReports(api: Api, now = new Date()) {
         }
         posted.push(`${t.name} ${job.period === "day" ? "EOD" : "EOW"}`);
 
-        // Every Manager gets it privately: the team PDF and each person's EOD PDF. One failing (e.g. never
-        // started the bot) doesn't stop the rest.
-        managers ??= await managersOnTelegram();
-        if (managers.length) {
+        // The team's Manager(s) and Team Lead get it privately: the team PDF and each person's EOD PDF.
+        // One failing (e.g. never started the bot) doesn't stop the rest.
+        overseers ??= await overseersOnTelegram();
+        const to = overseers.filter((o) => !o.teamIds || o.teamIds.includes(String(t._id)));
+        if (to.length) {
           const pack = await buildTeamPack(report, ymd);
-          for (const m of managers) {
+          for (const m of to) {
             try {
               await sendTeamPack(api, m.telegramId!, pack, job.period === "day" ? "EOD" : "EOW");
             } catch (err) {
@@ -143,7 +149,7 @@ function minus(hhmm: string, minutes: number) {
 }
 
 /**
- * Called every minute. ABSENT_AFTER_MIN after a team's shift starts, tells its Team Lead and every Manager
+ * Called every minute. ABSENT_AFTER_MIN after a team's shift starts, tells its Team Lead and Manager(s)
  * privately who hasn't come online today — they're absent. Once a day per team, and only if someone is.
  */
 export async function checkAbsences(api: Api, now = new Date()) {
@@ -155,7 +161,7 @@ export async function checkAbsences(api: Api, now = new Date()) {
   const teams = await Team.find({ reportsEnabled: { $ne: false }, shiftStart: { $ne: null } })
     .select("_id name lead shiftStart shiftEnd")
     .lean();
-  let managers: Awaited<ReturnType<typeof managersOnTelegram>> | null = null;
+  let overseers: Awaited<ReturnType<typeof overseersOnTelegram>> | null = null;
   for (const t of teams) {
     if (!isHhmm(t.shiftStart)) continue;
     const checkAt = minus(t.shiftStart, -ABSENT_AFTER_MIN);
@@ -170,9 +176,11 @@ export async function checkAbsences(api: Api, now = new Date()) {
       checked.push(`${t.name}: ${absent.length} absent`);
       if (!absent.length) continue;
 
-      managers ??= await managersOnTelegram();
+      // The team's Manager(s) and its Team Lead.
+      overseers ??= await overseersOnTelegram();
       const lead = t.lead ? await User.findById(t.lead).select("name telegramId").lean() : null;
-      const to = new Map([...managers, ...(lead?.telegramId ? [lead] : [])].map((p) => [p.telegramId!, p.name]));
+      const mine = overseers.filter((o) => !o.teamIds || o.teamIds.includes(String(t._id)));
+      const to = new Map([...mine, ...(lead?.telegramId ? [lead] : [])].map((p) => [p.telegramId!, p.name]));
       const text = `🚫 Absent today — ${t.name}\nNot online by ${checkAt} (shift started ${t.shiftStart}):\n${absent.map((m) => `• ${m.name}`).join("\n")}`;
       for (const [chatId, name] of to) {
         await api.sendMessage(chatId, text).catch((err) => console.error(`[reports] couldn't send ${t.name}'s absences to ${name}:`, (err as Error).message));
