@@ -870,9 +870,18 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     const memberIds = team
       ? (await Team.findById(team._id).select("members.user").lean())?.members.map((m) => m.user) ?? []
       : null;
-    const [ownTasks, assignedByMe, members] = await Promise.all([
+    const [ownTasks, assignedByMe, recentlyDone, members] = await Promise.all([
       openTasksFor(user._id),
       Task.find({ createdBy: user._id, assignee: { $ne: user._id }, status: { $ne: "done" } })
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .lean(),
+      // Just finished — so "Badges, add @priya" still finds the ticket.
+      Task.find({
+        $or: [{ assignee: user._id }, { collaborators: user._id }, { createdBy: user._id }],
+        status: "done",
+        updatedAt: { $gte: new Date(Date.now() - 3 * 86_400_000) },
+      })
         .sort({ updatedAt: -1 })
         .limit(10)
         .lean(),
@@ -897,6 +906,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     }
 
     const taskPool = [...ownTasks, ...assignedByMe];
+    for (const t of recentlyDone) if (!taskPool.some((p) => String(p._id) === String(t._id))) taskPool.push(t);
     if (replyTask && !taskPool.some((t) => String(t._id) === String(replyTask._id))) taskPool.push(replyTask);
     const nameById = new Map(members.map((m) => [String(m._id), m.name]));
 
@@ -971,11 +981,21 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
         } else if (action.type === "update_task") {
           const target = taskRefs.find((r) => r.ref === action.task)?.task;
           if (!target) continue;
+          const adding = (action.addPeople ?? [])
+            .map((ref) => memberRefs.find((r) => r.ref === ref)?.member)
+            .filter((m): m is NonNullable<typeof m> => Boolean(m))
+            .filter((m) => String(m._id) !== String(target.assignee) && !(target.collaborators ?? []).some((c) => String(c) === String(m._id)));
           const res = await updateTask(
             target._id,
-            { progress: action.progress ?? null, status: action.status ?? null, note: action.note ?? null },
+            {
+              progress: action.progress ?? null,
+              status: action.status ?? null,
+              note: action.note ?? null,
+              ...(adding.length ? { collaboratorIds: [...(target.collaborators ?? []), ...adding.map((m) => m._id)] } : {}),
+            },
             actx,
           );
+          if (adding.length && res) replies.push(`👥 ${ticket(res.task)} — added ${adding.map((m) => m.name).join(", ")}`);
           if (res?.changed) {
             applied++;
             if (res.task.status === "done" && target.status !== "done") replies.push(`✅ Done: ${ticket(res.task)}`);

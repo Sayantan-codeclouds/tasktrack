@@ -24,6 +24,7 @@ const UpdateTask = z.object({
   progress: z.number().min(0).max(100).nullish(),
   status: z.enum(TASK_STATUS).nullish(),
   note: z.string().nullish(),
+  addPeople: z.array(z.string()).max(10).nullish(),
 });
 const EodNote = z.object({
   type: z.literal("eod_note"),
@@ -75,9 +76,11 @@ Action types:
    - note: short reason or return time if given ("lunch", "back at 3pm"), else null.
    - Do NOT emit set_status if the sender is already in that status, unless the note changes.
    - If the sender is offline/break and clearly talks about doing work right now, also emit online.
-2. {"type":"update_task","task":"T#","progress":0-100|null,"status":"todo"|"in_progress"|"blocked"|"done"|null,"note":string|null}
+2. {"type":"update_task","task":"T#","progress":0-100|null,"status":"todo"|"in_progress"|"blocked"|"done"|null,"note":string|null,"addPeople":["M#",...]|null}
    - Only use refs from the TASKS list. Pick the task the message clearly refers to.
-     People may name a ticket by its key in brackets (e.g. "TT-12 done") — map it to that task's T# ref.
+     People may name a ticket by its key or its title (e.g. "TT-12 done", "Badges (Team2) — done") — map it to that task's T# ref.
+   - addPeople: members to add to that ticket ("Badges add @priya", "loop Ravi into TT-12", "@priya will help on the banner") → their M# refs.
+     Leave progress / status null unless the message also changes them. Null when nobody is added.
    - "almost done" ≈ 90, "halfway" = 50, "just started" ≈ 10, explicit percentages win.
    - finished/completed/done/shipped/merged → status "done".
    - stuck/blocked/waiting on someone → status "blocked" with a note.

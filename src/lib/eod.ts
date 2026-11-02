@@ -90,6 +90,8 @@ function mergeProgress(first: string, last: string) {
   return a && b ? progressText(Number(a[1]), Number(b[1])) : last || first;
 }
 
+const STATUS_REMARKS = new Set<string>(["Completed", ...Object.values(TASK_STATUS_LABEL)]);
+
 /** The automatic EOW: the week's EODs rolled up. */
 function weekDraft(days: { day: string; content: EodContent }[], r: PersonReport): EodContent {
   const label = (d: string) => formatDay(d, { weekday: "short", day: "numeric", month: "short" });
@@ -103,7 +105,11 @@ function weekDraft(days: { day: string; content: EodContent }[], r: PersonReport
         rows.set(k, { ...t });
         continue;
       }
-      const remarks = [...new Set([...prev.remarks.split(", "), ...t.remarks.split(", ")].filter(Boolean))].join(", ");
+      // Earlier days' status words ("In progress") give way to the latest one; anything else (e.g. "New") is kept.
+      const earlier = prev.remarks.split(", ").filter((x) => x && !STATUS_REMARKS.has(x));
+      const remarks = [...new Set([...t.remarks.split(", ").filter((x) => x && x !== "New"), ...earlier])]
+        .sort((a, b) => Number(a === "New") - Number(b === "New"))
+        .join(", ");
       rows.set(k, { ...t, progress: mergeProgress(prev.progress, t.progress), remarks });
     }
   }
