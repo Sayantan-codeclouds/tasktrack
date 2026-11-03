@@ -247,6 +247,18 @@ const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;")
 const MEETING_CALL =
   /\b(join|hop on|come on|get on)\b.{0,15}\b(our|team)( team)? (call|meet|meeting)\b|\b(team call|team meeting|standup|stand-up|huddle) (now|in \d+)|\b(join|hop on).{0,15}\b(standup|stand-up|huddle)\b|@(all|everyone)\b.{0,30}\b(call|meeting|meet)\b|\b(team )?meeting link\b/i;
 
+/**
+ * Looks like it was meant for the tracker: a ticket key, a list of jobs ("Tasks:" / "1. …"), or a tracker word next to
+ * an @person or ticket. If nothing comes of such a message, the bot reacts 🤔 instead of staying silent.
+ */
+function looksLikeInstruction(text: string) {
+  const key = /\b[A-Z]{2,5}-\d+\b/.test(text);
+  const list = /^\s*(tasks?|todo|to do|today|plan|eod)\s*:/im.test(text) || (text.match(/^\s*(\d+[.)]|[-•*])\s+\S/gm)?.length ?? 0) >= 2;
+  const verb = /\b(add|assign|reassign|move|remove|create|done|completed?|finished|blocked|progress|\d{1,3}\s?%)/i.test(text);
+  // "@ravi done?" is a question to Ravi, not to the bot.
+  return key || list || (verb && /@\w{3,}/.test(text) && !text.includes("?"));
+}
+
 const PRESENCE_MARK: Record<Presence, string> = { online: "🟢", break: "☕", offline: "🔴" };
 const APP_URL = process.env.APP_URL?.replace(/\/$/, "") || null;
 
@@ -940,6 +952,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       });
     } catch (err) {
       console.error("[ai] interpret failed:", err);
+      if (!tagged && looksLikeInstruction(text)) await react(ctx, "🤔");
       return;
     }
 
@@ -952,7 +965,11 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       questions.length && (addressed || result.confidence >= MIN_CONFIDENCE) ? replyAnswer(ctx, user, team, questions.join("\n")) : undefined;
     if (team && result.actions.some((a) => a.type === "meeting_call")) await postMeetingLink(ctx, team, tagged ? [] : mentions);
     const changes = result.actions.filter((a) => a.type !== "ask" && a.type !== "meeting_call");
-    if (!changes.length) return answer();
+    const handled = tagged || questions.length > 0 || result.actions.some((a) => a.type === "meeting_call");
+    if (!changes.length) {
+      if (!handled && looksLikeInstruction(text)) await react(ctx, "🤔");
+      return answer();
+    }
     if (result.confidence < MIN_CONFIDENCE) {
       await react(ctx, "🤔");
       return answer();
@@ -967,6 +984,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       teamId,
     };
     const replies: string[] = [];
+    const skipped: string[] = [];
     let applied = 0;
 
     for (const action of changes) {
@@ -1005,12 +1023,17 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
         } else if (action.type === "create_task") {
           const assignee = action.assignee ? memberRefs.find((r) => r.ref === action.assignee)?.member : null;
           const assigneeId = assignee?._id ?? user._id;
-          const duplicate = await Task.exists({
+          const duplicate = await Task.findOne({
             assignee: assigneeId,
             status: { $ne: "done" },
             title: { $regex: `^${escapeRegex(action.title.trim())}$`, $options: "i" },
-          });
-          if (duplicate) continue;
+          })
+            .select("number title")
+            .lean();
+          if (duplicate) {
+            skipped.push(ticket(duplicate));
+            continue;
+          }
           const task = await createTask(
             {
               title: action.title,
@@ -1049,6 +1072,9 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
 
     // EOD notes already got ✍ — only add 👍 when something else changed too.
     if (applied && !changes.every((a) => a.type === "eod_note")) await react(ctx, "👍");
+    if (skipped.length) replies.push(`ℹ️ Already open: ${skipped.join("; ")}`);
+    // Meant for the tracker, but nothing changed and there's nothing to say.
+    if (!applied && !replies.length && !handled && looksLikeInstruction(text)) await react(ctx, "🤔");
     if (replies.length) {
       await ctx.reply(replies.join("\n"), { reply_parameters: { message_id: ctx.msg.message_id } });
     }
