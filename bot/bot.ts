@@ -19,10 +19,10 @@ import {
 } from "../src/lib/constants";
 import { addEodNote, createTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
 import { buildTeamReport, formatReportText } from "../src/lib/reports";
-import { buildEodPage, eodFileName, markEodDownloaded } from "../src/lib/eod";
+import { buildEodPage, eodFileName, markEodDownloaded, type EodPage } from "../src/lib/eod";
 import { renderEodPdf } from "../src/lib/eodPdf";
 import { adminUserIds } from "../src/lib/admin";
-import { appTimeZone, dayKey } from "../src/lib/time";
+import { appTimeZone, dayKey, formatDay } from "../src/lib/time";
 import {
   addMember,
   addPending,
@@ -275,6 +275,8 @@ function menuKeyboard() {
     .text("📄 My EOD (PDF)", "m:myeod")
     .text("📄 My EOW (PDF)", "m:myeow")
     .row()
+    .text("📄 Yesterday's EOD (PDF)", "m:myeody")
+    .row()
     .text("📊 Team EOD", "m:report")
     .text("📊 Team EOW", "m:reportw")
     .row()
@@ -322,7 +324,7 @@ Commands (if you want to be exact) — or send /menu for buttons:
 /ask <question> — ask about tickets, progress, who's on what
 /meet — the team's meeting link
 /report · /report week — this team's EOD / EOW summary
-/myeod · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
+/myeod · /myeod yesterday · /myeod week — your own EOD / EOW as a PDF, sent to you privately (edit it on the website's EOD / EOW page)
 /teameod · /teameod week — Team Leads and Managers: every person's EOD / EOW PDF, sent privately
 /forgotpass — forgot your tracker password? I'll send you a reset link privately
 /link <CODE> — link your account, or connect this group to a team
@@ -362,6 +364,9 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
       case "myeod":
       case "myeow":
         note = await sendMyEod(ctx, action === "myeod" ? "day" : "week");
+        break;
+      case "myeody":
+        note = await sendMyEod(ctx, "day", true);
         break;
       case "teameod":
       case "teameow":
@@ -592,15 +597,24 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
   // Shared by commands and /menu buttons. Each returns a short note for the person (or null when the reply
   // itself says it all): commands post it in the chat, buttons show it as a pop-up.
 
-  /** Your EOD / EOW as a PDF, sent privately — ready to forward to HR. */
-  async function sendMyEod(ctx: Context, period: "day" | "week"): Promise<string | null> {
+  /** They were online that day, or saved an EOD for it. */
+  const worked = (p: EodPage) => p.saved || p.attendance.some((a) => a.onlineMinutes > 0 || a.login);
+
+  /** Your EOD / EOW as a PDF, sent privately — ready to forward to HR. Yesterday: the last day they worked. */
+  async function sendMyEod(ctx: Context, period: "day" | "week", yesterday = false): Promise<string | null> {
     const user = await findSender(ctx);
     if (!user) return NOT_LINKED;
-    const page = await buildEodPage(String(user._id), period, dayKey(new Date(), appTimeZone()));
+    let page = await buildEodPage(String(user._id), period, dayKey(new Date(Date.now() - (yesterday ? 86_400_000 : 0)), appTimeZone()));
+    // "Yesterday" on a Monday (or after a day off) means the last day they worked.
+    for (let back = 2; yesterday && page && !worked(page) && back <= 7; back++) {
+      page = await buildEodPage(String(user._id), "day", dayKey(new Date(Date.now() - back * 86_400_000), appTimeZone()));
+    }
     if (!page) return null;
+    if (yesterday && !worked(page)) return `${user.name}, I couldn't find a working day in the last week.`;
     const pdf = await renderEodPdf(page);
     const kind = period === "day" ? "EOD" : "EOW";
-    const caption = `${kind} — ${user.name}${page.saved ? "" : " (automatic; edit it on the EOD / EOW page)"}`;
+    const when = yesterday ? ` — ${formatDay(page.from, { weekday: "short", day: "numeric", month: "short" })}` : "";
+    const caption = `${kind}${when} — ${user.name}${page.saved ? "" : " (automatic; edit it on the EOD / EOW page)"}`;
     // Always to the person privately — never into the group.
     try {
       await ctx.api.sendDocument(ctx.from!.id, new InputFile(pdf, eodFileName(page)), { caption });
@@ -671,8 +685,11 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
   }
   bot.command("teameod", async (ctx) => noteFor(ctx, await sendTeamEods(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));
 
-  // /myeod → your EOD as a PDF, sent to you privately · /myeod week → your EOW
-  bot.command("myeod", async (ctx) => noteFor(ctx, await sendMyEod(ctx, /^w/i.test(argsOf(ctx)) ? "week" : "day")));
+  // /myeod → your EOD as a PDF, sent to you privately · /myeod week → your EOW · /myeod yesterday → your last working day's EOD
+  bot.command("myeod", async (ctx) => {
+    const arg = argsOf(ctx);
+    await noteFor(ctx, await sendMyEod(ctx, /^w/i.test(arg) ? "week" : "day", /^y/i.test(arg)));
+  });
 
   // /forgotpass. Telegram reads "/forgot-pass" as /forgot (commands can't contain "-"), so that works too.
   bot.command(["forgot", "forgotpass", "forgot_password", "resetpassword"], async (ctx) => noteFor(ctx, await sendResetLink(ctx)));
@@ -1098,7 +1115,7 @@ export const BOT_COMMANDS = [
   { command: "ask", description: "Ask about the work: /ask progress on Auxre?" },
   { command: "meet", description: "The team's meeting link" },
   { command: "report", description: "Team EOD report (/report week for EOW)" },
-  { command: "myeod", description: "Your EOD as a PDF (/myeod week for EOW)" },
+  { command: "myeod", description: "Your EOD as a PDF (/myeod yesterday, /myeod week)" },
   { command: "teameod", description: "Leads & Managers: everyone's EOD PDFs (/teameod week)" },
   { command: "forgotpass", description: "Forgot your tracker password? Get a reset link" },
   { command: "link", description: "Link your account or connect this group" },
