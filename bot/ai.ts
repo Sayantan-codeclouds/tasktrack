@@ -35,7 +35,8 @@ const Ask = z.object({
   question: z.string().min(2).max(500),
 });
 const MeetingCall = z.object({ type: z.literal("meeting_call") });
-const Action = z.discriminatedUnion("type", [SetStatus, CreateTask, UpdateTask, EodNote, Ask, MeetingCall]);
+const DeleteTask = z.object({ type: z.literal("delete_task"), task: z.string() });
+const Action = z.discriminatedUnion("type", [SetStatus, CreateTask, UpdateTask, EodNote, Ask, MeetingCall, DeleteTask]);
 export type AiAction = z.infer<typeof Action>;
 
 export interface InterpretInput {
@@ -122,6 +123,12 @@ Action types:
    - The sender calls the team into the team's call / meeting now or soon ("@all please join our team call",
      "everyone on the call in 5", "standup now", "let's hop on Meet", "team meeting, join"), or asks for the meeting link.
    - The bot then posts the team's meeting link. NOT for other calls ("@ravi join my client call", "I'm in a meeting").
+
+7. {"type":"delete_task","task":"T#"}
+   - Only when the sender explicitly asks to delete / remove / discard tickets ("delete TT-31 and TT-32", "remove the Badges
+     ticket, created by mistake", or "delete these tasks" in reply to a message that lists tickets → each ticket in it).
+     One action per ticket. Never for "done" / "cancelled work" / "not needed anymore" without a delete word — that's status.
+   - The bot asks the sender to confirm before anything is deleted.
 
 Rules:
 - Casual chat, jokes, links, thanks, questions between teammates, and anything unclear → "actions": [] .

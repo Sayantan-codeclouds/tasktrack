@@ -31,6 +31,7 @@ export const TYPE_STYLE: Record<ActivityType, { icon: string; tone: string }> = 
   task_status: { icon: "⇄", tone: "text-break bg-break/12" },
   task_completed: { icon: "✓", tone: "text-online bg-online/12" },
   task_deleted: { icon: "×", tone: "text-danger bg-danger/12" },
+  task_restored: { icon: "↺", tone: "text-accent bg-accent-soft" },
   account_linked: { icon: "⛓", tone: "text-accent bg-accent-soft" },
   account_unlinked: { icon: "⛓", tone: "text-muted bg-surface-2" },
   login: { icon: "→", tone: "text-muted bg-surface-2" },

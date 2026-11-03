@@ -35,6 +35,7 @@ import {
   TASK_STATUS,
   POSITION_LABEL,
   TASK_STATUS_LABEL,
+  canDeleteAnyTicket,
   canEditTicket,
   isManagerOrAbove,
   type Presence,
@@ -78,6 +79,7 @@ function onShift(start: string, end: string, now = new Date()) {
 }
 
 const TEAM_PREF = "tt.tracker.team";
+const DELETED_PREF = "tt.tracker.deleted";
 
 export default function TrackerView() {
   const { data, error } = usePolling<TrackerData>("/api/tracker", POLL_MS);
@@ -92,6 +94,15 @@ export default function TrackerView() {
   const [pending, setPending] = useState<Record<string, TaskStatus>>({});
   const [dragging, setDragging] = useState<TaskRow | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // The "Deleted" column is hidden until asked for.
+  const [showDeleted, setShowDeleted] = useState(false);
+  useEffect(() => setShowDeleted(readPref(DELETED_PREF) === "1"), []);
+  function toggleDeleted() {
+    setShowDeleted((v) => {
+      writePref(DELETED_PREF, v ? "0" : "1");
+      return !v;
+    });
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), // small move = click, not drag
@@ -156,6 +167,18 @@ export default function TrackerView() {
     });
   }, [teamTasks, person, priority, search]);
 
+  // Deleted tickets, with the same team / person / priority / search filters as the board.
+  const deleted = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (data?.deleted ?? []).filter(
+      (t) =>
+        (!team || inTeam(t, team)) &&
+        (!person || t.assignee?._id === person || (t.collaborators ?? []).some((c) => c._id === person)) &&
+        (!priority || t.priority === priority) &&
+        (!q || `${t.title} tt-${t.number ?? ""} ${t.assignee?.name ?? ""}`.toLowerCase().includes(q)),
+    );
+  }, [data?.deleted, team, person, priority, search]);
+
   const stats = useMemo(() => {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -197,6 +220,16 @@ export default function TrackerView() {
 
   function onDragStart(e: DragStartEvent) {
     setDragging(data!.tasks.find((t) => t._id === e.active.id) ?? null);
+  }
+
+  async function restore(t: TaskRow) {
+    try {
+      await api(`/api/tasks/${t._id}`, { method: "POST", json: { restore: true } });
+      setToast(`Restored ${t.number ? `TT-${t.number} ` : ""}${t.title}`);
+      emitRefresh();
+    } catch (err) {
+      setToast((err as Error).message);
+    }
   }
 
   async function onDragEnd(e: DragEndEvent) {
@@ -356,6 +389,15 @@ export default function TrackerView() {
           >
             My tickets
           </button>
+          <button
+            className={`btn-ghost py-1.5 ${showDeleted ? "border-danger/50 bg-danger/10 text-danger" : ""}`}
+            onClick={toggleDeleted}
+            aria-pressed={showDeleted}
+            title="Deleted tickets from the last 30 days — they can be restored"
+          >
+            🗑 Deleted
+            <span className="rounded-md bg-surface-2 px-1.5 text-xs tabular-nums text-muted">{deleted.length}</span>
+          </button>
           {filtered && (
             <button
               className="px-1 text-xs font-medium text-accent hover:underline"
@@ -377,7 +419,11 @@ export default function TrackerView() {
           onDragEnd={onDragEnd}
           onDragCancel={() => setDragging(null)}
         >
-          <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-4 lg:overflow-visible">
+          <div
+            className={`-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0 lg:grid lg:overflow-visible ${
+              showDeleted ? "lg:grid-cols-5" : "lg:grid-cols-4"
+            }`}
+          >
             {TASK_STATUS.map((s) => (
               <Column
                 key={s}
@@ -389,6 +435,7 @@ export default function TrackerView() {
                 onAdd={s === "todo" ? () => setEditing("new") : undefined}
               />
             ))}
+            {showDeleted && <DeletedColumn tasks={deleted} me={me} onRestore={restore} />}
           </div>
           <DragOverlay dropAnimation={{ duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" }}>
             {dragging ? <TicketCard task={dragging} overlay /> : null}
@@ -570,6 +617,43 @@ function Column({
         {!tasks.length && (
           <p className="m-auto py-6 text-center text-xs text-muted">{dragging && !isSource ? "Drop here" : "No tickets"}</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** The hidden fifth column: deleted tickets (last 30 days). Not a drop target — restore puts a ticket back where it was. */
+function DeletedColumn({ tasks, me, onRestore }: { tasks: TaskRow[]; me: Me; onRestore: (t: TaskRow) => void }) {
+  return (
+    <div className="flex w-[82vw] max-w-80 shrink-0 snap-start flex-col sm:w-72 lg:w-auto lg:max-w-none">
+      <div className="mb-2 flex items-center gap-2 px-1">
+        <span className="h-2 w-2 rounded-full bg-danger" />
+        <h3 className="text-xs font-semibold tracking-wide uppercase">Deleted</h3>
+        <span className="rounded-full bg-surface-2 px-1.5 text-xs font-medium tabular-nums text-muted">{tasks.length}</span>
+        <span className="text-[11px] text-muted">· last 30 days</span>
+      </div>
+      <div className="flex min-h-40 flex-1 flex-col gap-2 rounded-xl border-2 border-dashed border-danger/25 bg-surface-2 p-2 lg:max-h-[calc(100vh-17rem)] lg:min-h-[calc(100vh-24rem)] lg:overflow-y-auto">
+        {tasks.map((t) => {
+          const mayRestore = canDeleteAnyTicket(me) || t.createdBy?._id === me._id;
+          return (
+            <div key={t._id} className="space-y-1.5">
+              <div className="opacity-60 grayscale">
+                <TicketCard task={t} />
+              </div>
+              <div className="flex items-center gap-2 px-1 text-[11px] text-muted">
+                <span className="min-w-0 flex-1 truncate">
+                  Deleted{t.deletedBy ? ` by ${t.deletedBy.name}` : ""} {t.deletedAt ? timeAgo(t.deletedAt) : ""}
+                </span>
+                {mayRestore && (
+                  <button onClick={() => onRestore(t)} className="shrink-0 rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-accent-soft">
+                    ↺ Restore
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {!tasks.length && <p className="m-auto py-6 text-center text-xs text-muted">Nothing deleted</p>}
       </div>
     </div>
   );

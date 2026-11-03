@@ -42,6 +42,7 @@ const AUTHORITY_TYPES = new Set<ActivityType>([
   "member_joined",
   "member_left",
   "task_deleted",
+  "task_restored",
 ]);
 const TASK_TYPES = new Set<ActivityType>(["task_created", "task_progress", "task_status", "task_completed"]);
 
@@ -375,9 +376,14 @@ export async function updateTask(
   return { task: task.toObject(), changed: true };
 }
 
+/** Moves a ticket to "Deleted" — hidden everywhere, but kept so it can be restored. */
 export async function deleteTask(taskId: Id, ctx: ActivityContext) {
   await connectDB();
-  const task = await Task.findByIdAndDelete(taskId);
+  const task = await Task.findOneAndUpdate(
+    { _id: taskId, deletedAt: null },
+    { deletedAt: new Date(), deletedBy: ctx.actorId ?? null },
+    { timestamps: false },
+  );
   if (!task) return false;
   await logActivity(
     {
@@ -385,6 +391,28 @@ export async function deleteTask(taskId: Id, ctx: ActivityContext) {
       user: task.assignee ?? null,
       team: task.team ?? null,
       message: `${(await nameOf(ctx.actorId)) ?? "Someone"} deleted ${ticketLabel(task)}`,
+    },
+    ctx,
+  );
+  return true;
+}
+
+/** Brings a deleted ticket back, as it was. */
+export async function restoreTask(taskId: Id, ctx: ActivityContext) {
+  await connectDB();
+  const task = await Task.findOneAndUpdate(
+    { _id: taskId, deletedAt: { $ne: null } },
+    { deletedAt: null, deletedBy: null },
+    { timestamps: false, new: true },
+  );
+  if (!task) return false;
+  await logActivity(
+    {
+      type: "task_restored",
+      user: task.assignee ?? null,
+      team: task.team ?? null,
+      task: task._id,
+      message: `${(await nameOf(ctx.actorId)) ?? "Someone"} restored ${ticketLabel(task)}`,
     },
     ctx,
   );

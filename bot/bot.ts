@@ -11,13 +11,16 @@ import {
   POSITION_RANK,
   PRESENCE_LABEL,
   TASK_STATUS_LABEL,
+  canDeleteAnyTicket,
+  canEditTicket,
   isManagerOrAbove,
   rankOf,
   ticketKey,
+  type Position,
   type Presence,
   type Priority,
 } from "../src/lib/constants";
-import { addEodNote, createTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
+import { addEodNote, createTask, deleteTask, logActivity, setPresence, updateTask, type ActivityContext } from "../src/lib/services";
 import { buildTeamReport, formatReportText } from "../src/lib/reports";
 import { buildEodPage, eodFileName, markEodDownloaded, type EodPage } from "../src/lib/eod";
 import { renderEodPdf } from "../src/lib/eodPdf";
@@ -121,6 +124,41 @@ async function react(ctx: Context, emoji: "👍" | "🤔" | "✍") {
 /** "TT-12 Fix invoice bug" for bot replies. */
 const ticket = (t: { number?: number | null; title: string }) =>
   t.number ? `${ticketKey(t.number)} ${t.title}` : t.title;
+
+type Deleter = { _id: Types.ObjectId; role: "admin" | "member"; position?: Position | null };
+/** Same rule as the website: the ticket's creator, or a Manager and above. */
+const mayDelete = (u: Deleter, t: { createdBy?: Types.ObjectId | null }) =>
+  canDeleteAnyTicket({ _id: String(u._id), role: u.role, position: u.position ?? null }) || String(t.createdBy ?? "") === String(u._id);
+
+/** The website's edit rule, for tickets that aren't the sender's own. */
+async function mayEdit(
+  u: Deleter,
+  t: { team?: Types.ObjectId | null; assignee?: Types.ObjectId | null; createdBy?: Types.ObjectId | null; collaborators?: Types.ObjectId[] },
+) {
+  return canEditTicket(
+    { _id: String(u._id), role: u.role, position: u.position ?? null, teamIds: (await teamIdsForUser(u._id)).map(String) },
+    {
+      team: t.team ? String(t.team) : null,
+      assigneeId: t.assignee ? String(t.assignee) : null,
+      createdById: t.createdBy ? String(t.createdBy) : null,
+      collaboratorIds: (t.collaborators ?? []).map(String),
+    },
+  );
+}
+
+/** "Delete these tasks" → a confirm button first; nothing is deleted until it's tapped. */
+async function askToDelete(ctx: Context, user: Deleter, tasks: { number?: number | null; title: string; createdBy?: Types.ObjectId | null }[]) {
+  const allowed = tasks.filter((t) => t.number && mayDelete(user, t)).slice(0, 12);
+  const denied = tasks.filter((t) => !mayDelete(user, t));
+  const reply_parameters = ctx.msg ? { message_id: ctx.msg.message_id } : undefined;
+  if (denied.length)
+    await ctx.reply(`🚫 Only the person who created a ticket, or a Manager, can delete it:\n${denied.map((t) => `• ${ticket(t)}`).join("\n")}`, { reply_parameters });
+  if (!allowed.length) return;
+  await ctx.reply(`🗑 Delete ${allowed.length === 1 ? "this ticket" : `these ${allowed.length} tickets`}?\n${allowed.map((t) => `• ${ticket(t)}`).join("\n")}`, {
+    reply_parameters,
+    reply_markup: new InlineKeyboard().text("🗑 Delete", `del:${allowed.map((t) => t.number).join(",")}`).text("Cancel", "del:no"),
+  });
+}
 
 const PRIORITY_MARK: Partial<Record<Priority, string>> = { urgent: " 🔴 Urgent", high: " 🟠 High" };
 
@@ -301,6 +339,9 @@ Just talk normally — I'll understand things like:
 • "Login page is about 70% done" → Progress
 • "@ravi please build the payment API by Friday" → New ticket for Ravi
 • "Finished the dashboard, logging off" → Done + Offline
+• "Tasks: 1. Badges 2. Hawaii shipping" → A ticket for each
+• "Badges, add @priya" → Priya added to that ticket
+• "Delete TT-31 and TT-32" (or "delete these" as a reply) → Deleted after you confirm; restore from the board's 🗑 Deleted column
 
 Ask me about the work and I'll answer from the tracker:
 • "What's the progress on Auxre?"
@@ -348,6 +389,29 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
   bot.command("menu", (ctx) =>
     ctx.reply("📋 Menu — tap a button. It acts for you, whoever posted the menu.", { reply_markup: menuKeyboard() }),
   );
+
+  // The confirm buttons under "Delete these tickets?". Whoever taps is checked again, so only the creator or a Manager can.
+  bot.callbackQuery(/^del:(no|\d+(?:,\d+)*)$/, async (ctx) => {
+    if (ctx.match[1] === "no") {
+      await ctx.editMessageText("Cancelled — nothing was deleted.").catch(() => {});
+      return ctx.answerCallbackQuery();
+    }
+    const user = await findSender(ctx);
+    if (!user) return ctx.answerCallbackQuery({ text: "Link your Telegram to the tracker first.", show_alert: true });
+    const tasks = await Task.find({ number: { $in: ctx.match[1].split(",").map(Number) } }).lean();
+    const mine = tasks.filter((t) => mayDelete(user, t));
+    if (!mine.length)
+      return ctx.answerCallbackQuery({ text: tasks.length ? "Only the person who created these tickets, or a Manager, can delete them." : "Already deleted.", show_alert: true });
+    for (const t of mine) await deleteTask(t._id, { source: "telegram", actorId: user._id, teamId: t.team ?? null });
+    const left = tasks.filter((t) => !mine.includes(t));
+    await ctx
+      .editMessageText(
+        `🗑 Deleted by ${user.name}:\n${mine.map((t) => `• ${ticket(t)}`).join("\n")}\n(Restore from the board's 🗑 Deleted column.)` +
+          (left.length ? `\n\nNot deleted (only their creator or a Manager can):\n${left.map((t) => `• ${ticket(t)}`).join("\n")}` : ""),
+      )
+      .catch(() => {});
+    await ctx.answerCallbackQuery();
+  });
 
   bot.callbackQuery(/^m:(\w+)$/, async (ctx) => {
     const action = ctx.match[1];
@@ -936,6 +1000,17 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
 
     const taskPool = [...ownTasks, ...assignedByMe];
     for (const t of recentlyDone) if (!taskPool.some((p) => String(p._id) === String(t._id))) taskPool.push(t);
+    // Tickets named by key here or in the replied-to message ("delete these" under the bot's 🆕 list), even if not theirs.
+    const named = [...`${text}\n${reply && "text" in reply ? (reply.text ?? "") : ""}`.matchAll(/\bTT-(\d+)\b/gi)].map((m) => Number(m[1]));
+    // Not theirs: changing these needs the website's edit rule (checked when applying).
+    const foreign = new Set<string>();
+    if (named.length) {
+      for (const t of await Task.find({ number: { $in: named } }).lean()) {
+        if (taskPool.some((p) => String(p._id) === String(t._id))) continue;
+        taskPool.unshift(t);
+        foreign.add(String(t._id));
+      }
+    }
     if (replyTask && !taskPool.some((t) => String(t._id) === String(replyTask._id))) taskPool.push(replyTask);
     const nameById = new Map(members.map((m) => [String(m._id), m.name]));
 
@@ -1002,6 +1077,7 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     };
     const replies: string[] = [];
     const skipped: string[] = [];
+    const toDelete: (typeof taskPool)[number][] = [];
     let applied = 0;
 
     for (const action of changes) {
@@ -1013,9 +1089,16 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
             applied++;
             await react(ctx, "✍");
           }
+        } else if (action.type === "delete_task") {
+          const target = taskRefs.find((r) => r.ref === action.task)?.task;
+          if (target && !toDelete.includes(target)) toDelete.push(target);
         } else if (action.type === "update_task") {
           const target = taskRefs.find((r) => r.ref === action.task)?.task;
           if (!target) continue;
+          if (foreign.has(String(target._id)) && !(await mayEdit(user, target))) {
+            replies.push(`🚫 Only the assignee, the creator, the team's Team Lead or a Manager can change ${ticket(target)}`);
+            continue;
+          }
           const adding = (action.addPeople ?? [])
             .map((ref) => memberRefs.find((r) => r.ref === ref)?.member)
             .filter((m): m is NonNullable<typeof m> => Boolean(m))
@@ -1090,8 +1173,9 @@ export function createBot(token: string, options?: { botInfo?: UserFromGetMe }) 
     // EOD notes already got ✍ — only add 👍 when something else changed too.
     if (applied && !changes.every((a) => a.type === "eod_note")) await react(ctx, "👍");
     if (skipped.length) replies.push(`ℹ️ Already open: ${skipped.join("; ")}`);
+    if (toDelete.length) await askToDelete(ctx, user, toDelete);
     // Meant for the tracker, but nothing changed and there's nothing to say.
-    if (!applied && !replies.length && !handled && looksLikeInstruction(text)) await react(ctx, "🤔");
+    if (!applied && !replies.length && !toDelete.length && !handled && looksLikeInstruction(text)) await react(ctx, "🤔");
     if (replies.length) {
       await ctx.reply(replies.join("\n"), { reply_parameters: { message_id: ctx.msg.message_id } });
     }

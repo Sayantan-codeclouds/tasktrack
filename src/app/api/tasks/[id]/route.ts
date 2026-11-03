@@ -4,7 +4,7 @@ import { isValidObjectId } from "mongoose";
 import { jsonError, withUser } from "@/lib/api";
 import { Task } from "@/lib/models/Task";
 import { Team } from "@/lib/models/Team";
-import { deleteTask, updateTask } from "@/lib/services";
+import { deleteTask, restoreTask, updateTask } from "@/lib/services";
 import { teamIdsForUser } from "@/lib/teams";
 import { PRIORITY, TASK_STATUS, canDeleteAnyTicket, canEditTicket, isManagerOrAbove } from "@/lib/constants";
 import type { IUser } from "@/lib/models/User";
@@ -24,9 +24,9 @@ const Body = z.object({
   note: z.string().max(300).nullish(),
 });
 
-async function loadEditable(id: string, user: IUser) {
+async function loadEditable(id: string, user: IUser, deleted = false) {
   if (!isValidObjectId(id)) return null;
-  const task = await Task.findById(id).select("assignee createdBy team collaborators").lean();
+  const task = await Task.findOne({ _id: id, deletedAt: deleted ? { $ne: null } : null }).select("assignee createdBy team collaborators").lean();
   if (!task) return null;
   const actor = {
     _id: String(user._id),
@@ -88,5 +88,16 @@ export const DELETE = withUser<Ctx>(async (_req, { params, user }) => {
   if (!found) return jsonError("Task not found", 404);
   if (!found.canDelete) return jsonError("Only the creator or a Manager and above can delete this ticket", 403);
   await deleteTask(id, { source: "web", actorId: user._id });
+  return NextResponse.json({ ok: true });
+});
+
+/** POST { restore: true } — bring a deleted ticket back. Same people who could delete it. */
+export const POST = withUser<Ctx>(async (req, { params, user }) => {
+  const { id } = await params;
+  z.object({ restore: z.literal(true) }).parse(await req.json());
+  const found = await loadEditable(id, user, true);
+  if (!found) return jsonError("Deleted ticket not found", 404);
+  if (!found.canDelete) return jsonError("Only the creator or a Manager and above can restore this ticket", 403);
+  await restoreTask(id, { source: "web", actorId: user._id });
   return NextResponse.json({ ok: true });
 });

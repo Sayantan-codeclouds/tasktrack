@@ -21,6 +21,9 @@ export interface ITask {
   telegramChatId?: string | null;
   telegramMessageId?: number | null;
   telegramBotMessageId?: number | null;
+  /** Deleted tickets are kept (and can be restored) — every query skips them unless it asks for `deletedAt`. */
+  deletedAt?: Date | null;
+  deletedBy?: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,9 +47,24 @@ const TaskSchema = new Schema<ITask>(
     telegramMessageId: { type: Number, default: null },
     // The bot's own confirmation message, so replies to it also point at this task.
     telegramBotMessageId: { type: Number, default: null },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true },
 );
+
+// Hide deleted tickets everywhere (boards, reports, EODs, the bot) unless the query names deletedAt itself.
+// `{ deletedAt: null }` also matches tickets from before this field existed.
+TaskSchema.pre(
+  ["find", "findOne", "countDocuments", "findOneAndUpdate", "updateOne", "updateMany", "findOneAndDelete", "deleteOne", "deleteMany"],
+  function () {
+    if (!("deletedAt" in this.getFilter())) this.where({ deletedAt: null });
+  },
+);
+TaskSchema.pre("aggregate", function () {
+  const first = this.pipeline()[0] as { $match?: Record<string, unknown> } | undefined;
+  if (!first?.$match || !("deletedAt" in first.$match)) this.pipeline().unshift({ $match: { deletedAt: null } });
+});
 
 TaskSchema.index({ number: 1 }, { unique: true, partialFilterExpression: { number: { $type: "number" } } });
 TaskSchema.index({ assignee: 1, status: 1 });

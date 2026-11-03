@@ -34,6 +34,9 @@ export interface TaskRow {
   assignee: { _id: string; name: string } | null;
   collaborators: { _id: string; name: string }[];
   createdBy: { _id: string; name: string } | null;
+  /** Only on the board's hidden "Deleted" column. */
+  deletedAt?: string | null;
+  deletedBy?: { _id: string; name: string } | null;
 }
 
 export interface LogRow {
@@ -83,6 +86,7 @@ export interface TrackerData {
   members: Member[];
   teams: TeamSummary[];
   tasks: TaskRow[];
+  deleted: TaskRow[];
   stats: {
     online: number;
     onBreak: number;

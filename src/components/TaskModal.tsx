@@ -111,7 +111,7 @@ export default function TaskModal({ task, members, teams, defaultTeamId, me, onC
   }
 
   async function remove() {
-    if (!task || !confirm(`Delete “${task.title}”? This can't be undone.`)) return;
+    if (!task || !confirm(`Delete “${task.title}”? You can restore it from the board's 🗑 Deleted column.`)) return;
     setBusy(true);
     try {
       await api(`/api/tasks/${task._id}`, { method: "DELETE" });

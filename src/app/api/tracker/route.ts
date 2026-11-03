@@ -19,7 +19,7 @@ export const GET = withUser(async (_req, { user }) => {
   const doneSince = new Date(Date.now() - DONE_WINDOW_DAYS * 86_400_000);
 
   const hidden = new Set(await hiddenIdsFor(user));
-  const [members, allTasks, teams] = await Promise.all([
+  const [members, allTasks, teams, deletedTasks] = await Promise.all([
     // The admin account is invisible to everyone else.
     User.find(hidden.size ? { _id: { $nin: [...hidden] } } : {}).select(PUBLIC_USER_FIELDS).sort({ name: 1 }).lean(),
     // (teams fetched alongside so the board can switch between them)
@@ -30,19 +30,31 @@ export const GET = withUser(async (_req, { user }) => {
       .sort({ updatedAt: -1 })
       .lean(),
     Team.find().select("name color members.user telegramChatId lead manager shiftStart shiftEnd").sort({ name: 1 }).lean(),
+    // The board's hidden "Deleted" column: the last 30 days, restorable.
+    Task.find({ deletedAt: { $gte: doneSince } })
+      .populate("assignee", "name")
+      .populate("collaborators", "name")
+      .populate("createdBy", "name")
+      .populate("deletedBy", "name")
+      .sort({ deletedAt: -1 })
+      .limit(100)
+      .lean(),
   ]);
   // Hide the admin's own tickets and any trace of them on other tickets.
   type Ref = { _id: unknown; name: string } | null;
   const isHidden = (r: unknown) => !!r && hidden.has(String((r as { _id: unknown })._id));
-  const tasks = hidden.size
-    ? allTasks
-        .filter((t) => !isHidden(t.assignee) && !(!t.assignee && isHidden(t.createdBy)))
-        .map((t) => ({
-          ...t,
-          createdBy: isHidden(t.createdBy) ? null : t.createdBy,
-          collaborators: ((t.collaborators ?? []) as unknown as Ref[]).filter((c) => !isHidden(c)),
-        }))
-    : allTasks;
+  const visible = <T extends (typeof allTasks)[number]>(list: T[]) =>
+    hidden.size
+      ? list
+          .filter((t) => !isHidden(t.assignee) && !(!t.assignee && isHidden(t.createdBy)))
+          .map((t) => ({
+            ...t,
+            createdBy: isHidden(t.createdBy) ? null : t.createdBy,
+            collaborators: ((t.collaborators ?? []) as unknown as Ref[]).filter((c) => !isHidden(c)),
+            ...(t.deletedBy !== undefined && { deletedBy: isHidden(t.deletedBy) ? null : t.deletedBy }),
+          }))
+      : list;
+  const tasks = visible(allTasks);
 
   const me = String(user._id);
   const myTeamIds = teams
@@ -68,6 +80,7 @@ export const GET = withUser(async (_req, { user }) => {
     me: { _id: String(user._id), role: user.role, position: user.position ?? null, teamIds: myTeamIds },
     members: members.map((m) => ({ ...m, openTasks: openByUser.get(String(m._id)) ?? 0 })),
     tasks,
+    deleted: visible(deletedTasks),
     teams: teams.map((t) => ({
       _id: String(t._id),
       name: t.name,
