@@ -97,6 +97,10 @@ Action types:
    - Work can be assigned by role ("designer, please make the banner", "senior dev to review the API"):
      pick the member with that role. If several members share the role, set assignee null and lower confidence.
    - When the sender says they are starting a NEW piece of work that is not in TASKS → assignee null (means the sender).
+   - A list of work items ("Tasks:", "Today:", "Plan:", or just a numbered / bulleted list of jobs) is the sender's work list:
+     one create_task per item that is not already an OPEN ticket in TASKS (an item matching an open ticket → skip it, or
+     update_task if the item gives a status / %). A ticket that is already done does not count — the item is new work.
+     Keep the item's wording as the title, including any "(Team2)" part. Confidence high: this is a clear instruction.
    - Title: short and imperative ("Build payment API"). Resolve relative dates ("Friday", "tomorrow") using TODAY.
 
 4. {"type":"eod_note","text":string}
